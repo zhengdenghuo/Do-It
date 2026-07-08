@@ -2,7 +2,7 @@
 
 [![F-Droid Version](https://img.shields.io/f-droid/v/at.co.schwaerzler.maximilian.doit)](https://f-droid.org/packages/at.co.schwaerzler.maximilian.doit/)
 [![GitHub Release](https://img.shields.io/github/v/release/maximilian-schwaerzler/Do-It)](https://github.com/maximilian-schwaerzler/Do-It/releases/latest)
-[![Translation status](https://weblate.maximilian.schwaerzler.co.at/widget/do-it/svg-badge.svg)](https://weblate.maximilian.schwaerzler.co.at/engage/do-it/)
+[![Translation status](https://weblate.mschwaerzler.com/widget/do-it/svg-badge.svg)](https://weblate.mschwaerzler.com/engage/do-it/)
 [![GitHub License](https://img.shields.io/github/license/maximilian-schwaerzler/Do-It)](https://github.com/maximilian-schwaerzler/Do-It/blob/master/LICENSE)
 
 # Do-It
@@ -37,7 +37,7 @@ A modern Android to-do app built with Jetpack Compose and Material Design 3.
     - Tamil
     - Turkish
     - Chinese (simplified), thank you, Emily, for proofreading!
-    - Want to add your language? Contribute on [Weblate](https://weblate.maximilian.schwaerzler.co.at/engage/do-it/) or open
+    - Want to add your language? Contribute on [Weblate](https://weblate.mschwaerzler.com/engage/do-it/) or open
       an [issue](https://github.com/maximilian-schwaerzler/Do-It/issues/new?template=language_request.yml)!
 
 ## Tech Stack
@@ -63,7 +63,7 @@ A modern Android to-do app built with Jetpack Compose and Material Design 3.
 ## App translation
 
 Translating the app into as many languages as possible is one of my goals. Translations are managed
-on [Weblate](https://weblate.maximilian.schwaerzler.co.at/engage/do-it/) — the easiest way to
+on [Weblate](https://weblate.mschwaerzler.com/engage/do-it/) — the easiest way to
 contribute is to sign up there and suggest or improve strings directly in your browser. No Git
 knowledge required!
 

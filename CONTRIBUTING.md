@@ -9,12 +9,12 @@ For a general overview of the project see the [README](README.md).
 
 ## Ways to Contribute
 
-| Type                      | How                                                                                                                           |
-|---------------------------|-------------------------------------------------------------------------------------------------------------------------------|
-| Bug report                | Open a [GitHub issue](https://github.com/maximilian-schwaerzler/Do-It/issues)                                                 |
-| Feature request           | Open a [GitHub issue](https://github.com/maximilian-schwaerzler/Do-It/issues)                                                 |
-| New / updated translation | Translate on [Weblate](https://weblate.maximilian.schwaerzler.co.at/engage/do-it/) or see [Translations](#translations) below |
-| Code change               | Fork → branch → PR (see [Pull Requests](#submitting-a-pull-request))                                                          |
+| Type                      | How                                                                                                               |
+|---------------------------|-------------------------------------------------------------------------------------------------------------------|
+| Bug report                | Open a [GitHub issue](https://github.com/maximilian-schwaerzler/Do-It/issues)                                     |
+| Feature request           | Open a [GitHub issue](https://github.com/maximilian-schwaerzler/Do-It/issues)                                     |
+| New / updated translation | Translate on [Weblate](https://weblate.mschwaerzler.com/engage/do-it/) or see [Translations](#translations) below |
+| Code change               | Fork → branch → PR (see [Pull Requests](#submitting-a-pull-request))                                              |
 
 ---
 
@@ -104,7 +104,7 @@ at the end of the subject line where applicable (`fixes #42`).
 ## Translations
 
 The app is localized using Android string resources under `app/src/main/res/`. Translations are
-managed on [Weblate](https://weblate.maximilian.schwaerzler.co.at/engage/do-it/).
+managed on [Weblate](https://weblate.mschwaerzler.com/engage/do-it/).
 
 **Contribute or update a translation** — sign up on Weblate and suggest or improve strings directly
 in your browser. Weblate automatically opens a pull request with your changes once they are
