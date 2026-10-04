@@ -36,5 +36,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Do It"
+rootProject.name = "安卓待办"
 include(":app")

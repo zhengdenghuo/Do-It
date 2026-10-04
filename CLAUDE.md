@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 To run a single test class:
 ```bash
-./gradlew test --tests "at.co.schwaerzler.maximilian.doit.ExampleUnitTest"
+./gradlew test --tests "com.anzhuo.todo.ExampleUnitTest"
 ```
 
 ## Project Overview
@@ -38,7 +38,7 @@ To run a single test class:
 
 ## Module Structure
 
-Single-module project (`:app`). Package root: `at.co.schwaerzler.maximilian.doit`.
+Single-module project (`:app`). Package root: `com.anzhuo.todo`.
 
 Current source files:
 - `DoItApplication.kt` — custom `Application` subclass, lazily initializes the Room database

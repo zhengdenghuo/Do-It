@@ -13,7 +13,7 @@
   ~    See the License for the specific language governing permissions and
   ~    limitations under the License.
   --><resources>
-    <string name="app_name" translatable="false">Do It</string>
+    <string name="app_name" translatable="false">安卓待办</string>
     <plurals name="todos_selected_template">
         <item quantity="one">%1$d selected</item>
         <item quantity="other">%1$d selected</item>
@@ -22,7 +22,7 @@
         <item quantity="one">TODO deleted</item>
         <item quantity="other">TODOs deleted</item>
     </plurals>
-    <string name="just_do_it_app_bar" translatable="false">Just do it!</string>
+    <string name="just_do_it_app_bar" translatable="false">安卓待办</string>
     <string name="add_new_todo_fab">Add a new TODO</string>
     <string name="you_did_everything_empty_text">You did everything! 🚀</string>
     <string name="done_headline">Done</string>
@@ -54,7 +54,6 @@
     <string name="select_all">Select all</string>
     <string name="github_repo_url" translatable="false">https://github.com/maximilian-schwaerzler/Do-It</string>
     <string name="github_releases_base_url" translatable="false">https://github.com/maximilian-schwaerzler/Do-It/releases/tag</string>
-    <string name="fdroid_package_url" translatable="false">https://f-droid.org/packages/at.co.schwaerzler.maximilian.doit</string>
     <string name="settings_language">Language</string>
     <string name="settings_language_dialog_title">Select language</string>
     <string name="settings_language_system_default">System default</string>
@@ -65,7 +64,6 @@
     <string name="settings_section_about">About</string>
     <string name="app_version">Version</string>
     <string name="source_code">Source Code</string>
-    <string name="f_droid_package">F-Droid Package</string>
     <string name="theme">Theme</string>
     <string name="settings_section_general">General</string>
     <string name="overview_widget_description">Overview of your open TODOs</string>

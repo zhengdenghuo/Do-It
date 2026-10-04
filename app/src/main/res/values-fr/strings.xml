@@ -58,7 +58,6 @@
     <string name="settings_section_about">À propos</string>
     <string name="app_version">Version</string>
     <string name="source_code">Code source</string>
-    <string name="f_droid_package">Paquet F-Droid</string>
     <string name="theme">Thème</string>
     <string name="settings_section_general">Généralités</string>
     <string name="overview_widget_description">Aperçu de vos tâches en attente</string>

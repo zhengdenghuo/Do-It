@@ -24,7 +24,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:data="doit://todo"
-            android:targetClass="at.co.schwaerzler.maximilian.doit.MainActivity"
-            android:targetPackage="at.co.schwaerzler.maximilian.doit" />
+            android:targetClass="com.anzhuo.todo.MainActivity"
+            android:targetPackage="com.anzhuo.todo" />
     </shortcut>
 </shortcuts>

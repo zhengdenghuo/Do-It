@@ -1,6 +1,5 @@
 ![Social Banner](assets/images/social-banner.png)
 
-[![F-Droid Version](https://img.shields.io/f-droid/v/at.co.schwaerzler.maximilian.doit)](https://f-droid.org/packages/at.co.schwaerzler.maximilian.doit/)
 [![GitHub Release](https://img.shields.io/github/v/release/maximilian-schwaerzler/Do-It)](https://github.com/maximilian-schwaerzler/Do-It/releases/latest)
 [![Translation status](https://weblate.mschwaerzler.com/widget/do-it/svg-badge.svg)](https://weblate.mschwaerzler.com/engage/do-it/)
 [![GitHub License](https://img.shields.io/github/license/maximilian-schwaerzler/Do-It)](https://github.com/maximilian-schwaerzler/Do-It/blob/master/LICENSE)
@@ -73,11 +72,7 @@ very much!**
 
 ## Installation
 
-[<img src="https://f-droid.org/badge/get-it-on.png" alt="Get it on F-Droid" height="80">](https://f-droid.org/packages/at.co.schwaerzler.maximilian.doit)
-
-Download the app on
-the [F-Droid App Store](https://f-droid.org/packages/at.co.schwaerzler.maximilian.doit) or directly
-from the [Releases](https://github.com/maximilian-schwaerzler/Do-It/releases) here.
+Open this project in Android Studio and run the `app` configuration, or build a debug APK with `./gradlew assembleDebug`.
 
 ## Getting Started
 
@@ -99,10 +94,10 @@ a [Docker](https://www.docker.com/) version supporting Docker Compose installed.
 
 ## Project Structure
 
-Single-module project (`:app`). Package root: `at.co.schwaerzler.maximilian.doit`.
+Single-module project (`:app`). Package root: `com.anzhuo.todo`.
 
 ```text
-app/src/main/java/at/co/schwaerzler/maximilian/doit/
+app/src/main/java/com/anzhuo/todo/
 ├── DoItApplication.kt
 ├── MainActivity.kt
 ├── OverviewWidget.kt

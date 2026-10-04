@@ -30,7 +30,7 @@ room {
 }
 
 android {
-    namespace = "at.co.schwaerzler.maximilian.doit"
+    namespace = "com.anzhuo.todo"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -54,7 +54,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "at.co.schwaerzler.maximilian.doit"
+        applicationId = "com.anzhuo.todo"
         minSdk = 26
         //noinspection OldTargetApi
         targetSdk = 36

@@ -50,7 +50,7 @@ Open the cloned directory in Android Studio. Gradle will sync automatically.
 To run a single test class:
 
 ```bash
-./gradlew test --tests "at.co.schwaerzler.maximilian.doit.ExampleUnitTest"
+./gradlew test --tests "com.anzhuo.todo.ExampleUnitTest"
 ```
 
 ---
