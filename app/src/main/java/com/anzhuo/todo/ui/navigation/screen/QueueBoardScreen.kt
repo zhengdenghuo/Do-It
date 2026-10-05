@@ -51,6 +51,7 @@ import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -197,59 +198,71 @@ private fun QueueLaneCard(lane: QueueLane, scale: Float, modifier: Modifier = Mo
             .fillMaxWidth()
             .clip(RoundedCornerShape((18f * scale).dp))
             .background(LaneAmber)
-            .padding(horizontal = (18f * scale).dp, vertical = (6f * scale).dp),
+            .padding(start = (12f * scale).dp, end = (16f * scale).dp, top = (4f * scale).dp, bottom = (6f * scale).dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
-            Modifier.width((168f * scale).dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                lane.letter,
-                color = LetterRed,
-                fontSize = (52f * scale).sp,
-                fontWeight = FontWeight.Black,
-                style = TightText
-            )
-            Spacer(Modifier.width((10f * scale).dp))
-            Column {
+        BoxWithConstraints(Modifier.fillMaxHeight()) {
+            val block = maxHeight.value.coerceAtLeast(1f)
+            Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.Top) {
                 Text(
-                    lane.partySize,
-                    color = BoardWhite,
-                    fontSize = (22f * scale).sp,
-                    fontWeight = FontWeight.Bold,
+                    lane.letter,
+                    color = LetterRed,
+                    fontSize = (block * 0.72f).sp,
+                    lineHeight = (block * 0.72f).sp,
+                    fontWeight = FontWeight.Black,
                     style = TightText
                 )
-                Spacer(Modifier.height((6f * scale).dp))
-                Text(
-                    "签到  ${lane.checkedIn}",
-                    color = BoardWhite,
-                    fontSize = (16f * scale).sp,
-                    style = TightText
-                )
-                Spacer(Modifier.height((2f * scale).dp))
-                Text(
-                    "总  ${lane.total}",
-                    color = BoardWhite,
-                    fontSize = (16f * scale).sp,
-                    style = TightText
-                )
+                Spacer(Modifier.width((block * 0.1f).dp))
+                Column(Modifier.padding(top = (block * 0.02f).dp)) {
+                    Text(
+                        lane.partySize,
+                        color = BoardWhite,
+                        fontSize = (block * 0.22f).sp,
+                        fontWeight = FontWeight.Bold,
+                        style = TightText,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape((block * 0.05f).dp))
+                            .background(WaitingGreen)
+                            .padding(horizontal = (block * 0.09f).dp, vertical = (block * 0.02f).dp)
+                    )
+                    Spacer(Modifier.height((block * 0.06f).dp))
+                    LaneCount("签到", lane.checkedIn, block)
+                    Spacer(Modifier.height((block * 0.02f).dp))
+                    LaneCount("总", lane.total, block)
+                }
             }
         }
-        Column(
-            Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy((8f * scale).dp)
+        Spacer(Modifier.width((16f * scale).dp))
+        BoxWithConstraints(
+            Modifier
+                .weight(1f)
+                .fillMaxHeight()
         ) {
-            lane.tickets.chunked(TICKETS_PER_ROW).forEach { row ->
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    row.forEach { ticket ->
-                        Box(Modifier.weight(1f)) { TicketChip(ticket, scale) }
-                    }
-                    repeat(TICKETS_PER_ROW - row.size) {
-                        Spacer(Modifier.weight(1f))
+            val rowCount = if (lane.tickets.size > TICKETS_PER_ROW) 2 else 1
+            val rowGap = maxHeight.value * 0.04f
+            val rowHeight = (maxHeight.value - rowGap * (rowCount - 1)) / rowCount
+            val cellWidth = maxWidth.value / TICKETS_PER_ROW
+            val numberSize = min(cellWidth * 0.28f, rowHeight * 0.46f)
+            val badgeSize = min(cellWidth * 0.15f, rowHeight * 0.20f)
+            Column(
+                Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(rowGap.dp, Alignment.CenterVertically)
+            ) {
+                lane.tickets.chunked(TICKETS_PER_ROW).forEach { row ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(rowHeight.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        row.forEach { ticket ->
+                            Box(Modifier.weight(1f)) {
+                                TicketChip(ticket, badgeSize, numberSize)
+                            }
+                        }
+                        repeat(TICKETS_PER_ROW - row.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
@@ -258,33 +271,59 @@ private fun QueueLaneCard(lane: QueueLane, scale: Float, modifier: Modifier = Mo
 }
 
 @Composable
-private fun TicketChip(ticket: QueueTicket, scale: Float) {
+private fun LaneCount(label: String, value: Int, blockHeight: Float) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            label,
+            color = BoardBlack,
+            fontSize = (blockHeight * 0.16f).sp,
+            fontWeight = FontWeight.Medium,
+            style = TightText
+        )
+        Spacer(Modifier.width((blockHeight * 0.08f).dp))
+        Text(
+            value.toString(),
+            color = BoardBlack,
+            fontSize = (blockHeight * 0.26f).sp,
+            lineHeight = (blockHeight * 0.26f).sp,
+            fontWeight = FontWeight.Black,
+            style = TightText
+        )
+    }
+}
+
+@Composable
+private fun TicketChip(ticket: QueueTicket, badgeSize: Float, numberSize: Float) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         val badge = if (ticket.calling) "叫号" else "等待"
         Column(
             modifier = Modifier
-                .clip(RoundedCornerShape((3f * scale).dp))
+                .clip(RoundedCornerShape((badgeSize * 0.22f).dp))
                 .background(if (ticket.calling) CallingRed else WaitingGreen)
-                .padding(horizontal = (4f * scale).dp, vertical = (2f * scale).dp),
+                .padding(horizontal = (badgeSize * 0.35f).dp, vertical = (badgeSize * 0.12f).dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             badge.forEach { character ->
                 Text(
                     character.toString(),
                     color = BoardWhite,
-                    fontSize = (13f * scale).sp,
-                    lineHeight = (14f * scale).sp,
+                    fontSize = badgeSize.sp,
+                    lineHeight = (badgeSize * 1.05f).sp,
                     fontWeight = FontWeight.Bold,
                     style = TightText
                 )
             }
         }
-        Spacer(Modifier.width((4f * scale).dp))
+        Spacer(Modifier.width((numberSize * 0.16f).dp))
         Text(
             ticket.label,
             color = BoardWhite,
-            fontSize = (18f * scale).sp,
-            fontWeight = FontWeight.Medium,
+            fontSize = numberSize.sp,
+            lineHeight = numberSize.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Clip,
             style = TightText
         )
     }
