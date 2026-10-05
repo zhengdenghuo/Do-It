@@ -4,7 +4,9 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,23 +25,38 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalView
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.anzhuo.todo.data.queue.QueueBoardUiState
+import com.anzhuo.todo.data.queue.QueueBoardViewModel
+import com.anzhuo.todo.data.queue.QueueSummaryData
+import com.anzhuo.todo.data.queue.QueueTableItem
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.net.HttpURLConnection
+import java.net.URL
 import kotlin.math.min
 
 private val BoardBlack = Color(0xFF000000)
@@ -64,42 +81,22 @@ private data class QueueLane(
     val tickets: List<QueueTicket>,
 )
 
-private fun sampleLane(letter: String, callingFirst: Boolean) = QueueLane(
-    letter = letter,
-    partySize = "1-2人",
-    checkedIn = 24,
-    total = 64,
-    tickets = List(12) { index ->
-        QueueTicket(label = "A145延", calling = callingFirst && index == 0)
-    },
-)
-
-private val SampleLanes = listOf(
-    sampleLane("A", callingFirst = true),
-    sampleLane("B", callingFirst = false),
-    sampleLane("C", callingFirst = false),
-    sampleLane("F", callingFirst = false),
-)
+private const val CALLING_STATUS = 30
+private const val TICKETS_PER_ROW = 6
+private const val MAX_TICKETS = 12
 
 @Composable
-fun QueueBoardScreen() {
+fun QueueBoardScreen(viewModel: QueueBoardViewModel = viewModel(factory = QueueBoardViewModel.Factory)) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val view = LocalView.current
     DisposableEffect(view) {
         val activity = view.context.findActivity()
         val previousOrientation = activity?.requestedOrientation
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-        val controller = activity?.window?.let { window ->
-            WindowCompat.getInsetsController(window, view).also {
-                it.hide(WindowInsetsCompat.Type.systemBars())
-                it.systemBarsBehavior =
-                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            }
-        }
         onDispose {
             if (activity != null && previousOrientation != null) {
                 activity.requestedOrientation = previousOrientation
             }
-            controller?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
@@ -111,26 +108,87 @@ fun QueueBoardScreen() {
         val scale = min(maxWidth.value / 1280f, maxHeight.value / 720f)
         val pad = (14f * scale).dp
         val gap = (12f * scale).dp
-        Row(
-            Modifier
-                .fillMaxSize()
-                .padding(pad),
-            horizontalArrangement = Arrangement.spacedBy(gap)
-        ) {
-            Column(
+        val summary = uiState.summary
+        if (summary == null) {
+            Box(
                 Modifier
-                    .weight(2.45f)
-                    .fillMaxHeight(),
-                verticalArrangement = Arrangement.spacedBy(gap)
+                    .fillMaxSize()
+                    .background(PanelGreen)
+                    .padding(pad),
+                contentAlignment = Alignment.Center
             ) {
-                SampleLanes.forEach { lane ->
-                    QueueLaneCard(lane, scale, Modifier.weight(1f))
-                }
+                WaitingPanel(uiState, scale, Modifier.fillMaxWidth(0.72f))
             }
-            BrandPanel(scale, Modifier.weight(1f).fillMaxHeight())
+        } else {
+            val lanes = summary.toLanes()
+            Row(
+                Modifier
+                    .fillMaxSize()
+                    .padding(pad),
+                horizontalArrangement = Arrangement.spacedBy(gap)
+            ) {
+                Column(
+                    Modifier
+                        .weight(2.45f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(gap)
+                ) {
+                    if (lanes.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(
+                                summary.content.ifBlank { "暂无桌型排队" },
+                                color = BoardWhite,
+                                fontSize = (28f * scale).sp,
+                                style = TightText
+                            )
+                        }
+                    } else {
+                        lanes.forEach { lane ->
+                            QueueLaneCard(lane, scale, Modifier.weight(1f))
+                        }
+                    }
+                }
+                BrandPanel(summary.toBrand(), scale, Modifier.weight(1f).fillMaxHeight())
+            }
         }
     }
 }
+
+private fun QueueSummaryData.toLanes(): List<QueueLane> = tableList.map { it.toLane() }
+
+private fun QueueTableItem.toLane(): QueueLane {
+    val letter = tableName.ifBlank { prefix }.ifBlank { "?" }
+    return QueueLane(
+        letter = letter,
+        partySize = "$minNum-${maxNum}人",
+        checkedIn = signedCount,
+        total = totalCount,
+        tickets = signedList.take(MAX_TICKETS).map { item ->
+            QueueTicket(
+                label = item.queueNoText.ifBlank { letter },
+                calling = item.status == CALLING_STATUS,
+            )
+        }
+    )
+}
+
+private fun QueueSummaryData.toBrand() = BrandContent(
+    title = queueText.ifBlank { "排队" },
+    subtitle = content,
+    logoUrl = logo,
+    scanText = queueDesc.ifBlank { "排队取号&扫码签到" },
+    sideText = groupText.ifBlank { "过滤空号，排队更快" },
+    qrUrl = if (isOpen == 1 && qrcodeUrl.isNotBlank()) qrcodeUrl else groupQrcode,
+)
+
+private data class BrandContent(
+    val title: String,
+    val subtitle: String,
+    val logoUrl: String,
+    val scanText: String,
+    val sideText: String,
+    val qrUrl: String,
+)
 
 @Composable
 private fun QueueLaneCard(lane: QueueLane, scale: Float, modifier: Modifier = Modifier) {
@@ -182,13 +240,17 @@ private fun QueueLaneCard(lane: QueueLane, scale: Float, modifier: Modifier = Mo
             Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy((8f * scale).dp)
         ) {
-            lane.tickets.chunked(6).forEach { row ->
+            lane.tickets.chunked(TICKETS_PER_ROW).forEach { row ->
                 Row(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    row.forEach { ticket -> TicketChip(ticket, scale) }
+                    row.forEach { ticket ->
+                        Box(Modifier.weight(1f)) { TicketChip(ticket, scale) }
+                    }
+                    repeat(TICKETS_PER_ROW - row.size) {
+                        Spacer(Modifier.weight(1f))
+                    }
                 }
             }
         }
@@ -198,17 +260,25 @@ private fun QueueLaneCard(lane: QueueLane, scale: Float, modifier: Modifier = Mo
 @Composable
 private fun TicketChip(ticket: QueueTicket, scale: Float) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            text = if (ticket.calling) "叫号" else "等",
-            color = BoardWhite,
-            fontSize = (13f * scale).sp,
-            fontWeight = FontWeight.Bold,
-            style = TightText,
+        val badge = if (ticket.calling) "叫号" else "等待"
+        Column(
             modifier = Modifier
                 .clip(RoundedCornerShape((3f * scale).dp))
                 .background(if (ticket.calling) CallingRed else WaitingGreen)
-                .padding(horizontal = (4f * scale).dp, vertical = (2f * scale).dp)
-        )
+                .padding(horizontal = (4f * scale).dp, vertical = (2f * scale).dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            badge.forEach { character ->
+                Text(
+                    character.toString(),
+                    color = BoardWhite,
+                    fontSize = (13f * scale).sp,
+                    lineHeight = (14f * scale).sp,
+                    fontWeight = FontWeight.Bold,
+                    style = TightText
+                )
+            }
+        }
         Spacer(Modifier.width((4f * scale).dp))
         Text(
             ticket.label,
@@ -221,7 +291,53 @@ private fun TicketChip(ticket: QueueTicket, scale: Float) {
 }
 
 @Composable
-private fun BrandPanel(scale: Float, modifier: Modifier = Modifier) {
+private fun WaitingPanel(state: QueueBoardUiState, scale: Float, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape((24f * scale).dp))
+            .background(LaneAmber)
+            .padding(horizontal = (36f * scale).dp, vertical = (28f * scale).dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = when {
+                state.loading -> "正在连接门店…"
+                else -> state.errorMessage ?: "暂时没有排队数据"
+            },
+            color = LetterRed,
+            fontSize = (28f * scale).sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            style = TightText
+        )
+        Spacer(Modifier.height((28f * scale).dp))
+        Text(
+            "设备 MAC",
+            color = BoardBlack,
+            fontSize = (16f * scale).sp,
+            style = TightText
+        )
+        Spacer(Modifier.height((8f * scale).dp))
+        Text(
+            state.mac,
+            color = BoardBlack,
+            fontSize = (40f * scale).sp,
+            fontWeight = FontWeight.Black,
+            style = TightText
+        )
+        Spacer(Modifier.height((12f * scale).dp))
+        Text(
+            "把这个地址填到后台，绑定这台屏幕",
+            color = BoardBlack,
+            fontSize = (16f * scale).sp,
+            style = TightText
+        )
+    }
+}
+
+@Composable
+private fun BrandPanel(brand: BrandContent, scale: Float, modifier: Modifier = Modifier) {
     Column(
         modifier
             .clip(RoundedCornerShape((22f * scale).dp))
@@ -229,69 +345,52 @@ private fun BrandPanel(scale: Float, modifier: Modifier = Modifier) {
             .padding(horizontal = (16f * scale).dp, vertical = (14f * scale).dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            brand.title,
+            color = BoardWhite,
+            fontSize = (28f * scale).sp,
+            fontWeight = FontWeight.Black,
+            textAlign = TextAlign.Center,
+            style = TightText
+        )
+        if (brand.subtitle.isNotBlank()) {
+            Spacer(Modifier.height((8f * scale).dp))
             Text(
-                "鲜主",
+                brand.subtitle,
                 color = BoardWhite,
-                fontSize = (46f * scale).sp,
-                fontWeight = FontWeight.Black,
+                fontSize = (16f * scale).sp,
+                textAlign = TextAlign.Center,
                 style = TightText
             )
-            Spacer(Modifier.width((8f * scale).dp))
-            Column {
-                Text(
-                    "牛肉海鲜",
-                    color = BoardWhite,
-                    fontSize = (18f * scale).sp,
-                    fontWeight = FontWeight.Bold,
-                    style = TightText
-                )
-                Text(
-                    "自选火锅",
-                    color = BoardWhite,
-                    fontSize = (18f * scale).sp,
-                    fontWeight = FontWeight.Bold,
-                    style = TightText
-                )
-            }
         }
-        Spacer(Modifier.height((12f * scale).dp))
-        Text(
-            "鲜主牛肉海鲜火锅",
-            color = BoardWhite,
-            fontSize = (18f * scale).sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
-            style = TightText
-        )
-        Text(
-            "(百联又一城店)",
-            color = BoardWhite,
-            fontSize = (18f * scale).sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
-            style = TightText
-        )
         Spacer(Modifier.height((16f * scale).dp))
-        Box(
-            Modifier
+        RemoteImage(
+            url = brand.logoUrl,
+            modifier = Modifier
                 .width((150f * scale).dp)
                 .height((96f * scale).dp)
-                .clip(RoundedCornerShape((4f * scale).dp))
-                .background(LogoGray)
+                .clip(RoundedCornerShape((4f * scale).dp)),
+            fallback = {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(LogoGray)
+                )
+            }
         )
         Spacer(Modifier.weight(1f))
         Text(
-            "排队取号&扫码签到",
+            brand.scanText,
             color = BoardWhite,
             fontSize = (18f * scale).sp,
             fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
             style = TightText
         )
         Spacer(Modifier.height((8f * scale).dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                "过滤空号，排队更快".forEach { character ->
+                brand.sideText.forEach { character ->
                     Text(
                         character.toString(),
                         color = BoardWhite,
@@ -302,7 +401,17 @@ private fun BrandPanel(scale: Float, modifier: Modifier = Modifier) {
                 }
             }
             Spacer(Modifier.width((8f * scale).dp))
-            QrMark(Modifier.width((150f * scale).dp))
+            if (brand.qrUrl.isNotBlank()) {
+                RemoteImage(
+                    url = brand.qrUrl,
+                    modifier = Modifier
+                        .width((150f * scale).dp)
+                        .aspectRatio(1f),
+                    fallback = { QrMark(Modifier.fillMaxSize()) }
+                )
+            } else {
+                QrMark(Modifier.width((150f * scale).dp))
+            }
         }
         Spacer(Modifier.height((12f * scale).dp))
         Row(
@@ -322,6 +431,39 @@ private fun BrandPanel(scale: Float, modifier: Modifier = Modifier) {
                 style = TightText
             )
         }
+    }
+}
+
+@Composable
+private fun RemoteImage(
+    url: String,
+    modifier: Modifier = Modifier,
+    fallback: @Composable () -> Unit,
+) {
+    var image by remember(url) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(url) {
+        image = if (url.isBlank()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val connection = URL(url).openConnection() as HttpURLConnection
+                    connection.connectTimeout = 8_000
+                    connection.readTimeout = 8_000
+                    connection.inputStream.use { BitmapFactory.decodeStream(it) }
+                }.getOrNull()?.asImageBitmap()
+            }
+        }
+    }
+    if (image == null) {
+        Box(modifier) { fallback() }
+    } else {
+        Image(
+            bitmap = image!!,
+            contentDescription = null,
+            modifier = modifier,
+            contentScale = ContentScale.Fit
+        )
     }
 }
 
