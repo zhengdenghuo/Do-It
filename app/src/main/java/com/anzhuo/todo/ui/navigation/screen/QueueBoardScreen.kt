@@ -41,6 +41,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.anzhuo.todo.data.queue.QueueBoardUiState
@@ -65,6 +67,7 @@ private val LaneAmber = Color(0xFFF0B043)
 private val LetterRed = Color(0xFFE4452A)
 private val CallingRed = Color(0xFFE0362C)
 private val WaitingGreen = Color(0xFF2F8F5E)
+private val PartyBadge = Color(0xFF143528)
 private val PanelGreen = Color(0xFF5C8C4A)
 private val PillGreen = Color(0xFF3F6A38)
 private val LogoGray = Color(0xFFD5D5D5)
@@ -94,7 +97,14 @@ fun QueueBoardScreen(viewModel: QueueBoardViewModel = viewModel(factory = QueueB
         val activity = view.context.findActivity()
         val previousOrientation = activity?.requestedOrientation
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        val insets = activity?.window?.let { window ->
+            WindowInsetsControllerCompat(window, view).apply {
+                hide(WindowInsetsCompat.Type.systemBars())
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        }
         onDispose {
+            insets?.show(WindowInsetsCompat.Type.systemBars())
             if (activity != null && previousOrientation != null) {
                 activity.requestedOrientation = previousOrientation
             }
@@ -149,7 +159,7 @@ fun QueueBoardScreen(viewModel: QueueBoardViewModel = viewModel(factory = QueueB
                         }
                     }
                 }
-                BrandPanel(summary.toBrand(), scale, Modifier.weight(1f).fillMaxHeight())
+                BrandPanel(summary.toBrand(), Modifier.weight(1f).fillMaxHeight())
             }
         }
     }
@@ -173,9 +183,27 @@ private fun QueueTableItem.toLane(): QueueLane {
     )
 }
 
+private fun String.toPlainBoardText(title: String): String {
+    val decoded = replace("&nbsp;", " ")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+    return decoded
+        .replace(Regex("(?i)<br\\s*/?>"), "\n")
+        .replace(Regex("(?i)</p>"), "\n")
+        .replace(Regex("<[^>]*>"), "")
+        .lines()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && it != title.trim() }
+        .take(4)
+        .joinToString("\n")
+}
+
 private fun QueueSummaryData.toBrand() = BrandContent(
     title = queueText.ifBlank { "排队" },
-    subtitle = content,
+    subtitle = content.toPlainBoardText(queueText),
     logoUrl = logo,
     scanText = queueDesc.ifBlank { "排队取号&扫码签到" },
     sideText = groupText.ifBlank { "过滤空号，排队更快" },
@@ -203,7 +231,7 @@ private fun QueueLaneCard(lane: QueueLane, scale: Float, modifier: Modifier = Mo
     ) {
         BoxWithConstraints(Modifier.fillMaxHeight()) {
             val block = maxHeight.value.coerceAtLeast(1f)
-            Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.Top) {
+            Row(Modifier.fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     lane.letter,
                     color = LetterRed,
@@ -222,7 +250,7 @@ private fun QueueLaneCard(lane: QueueLane, scale: Float, modifier: Modifier = Mo
                         style = TightText,
                         modifier = Modifier
                             .clip(RoundedCornerShape((block * 0.05f).dp))
-                            .background(WaitingGreen)
+                            .background(PartyBadge)
                             .padding(horizontal = (block * 0.09f).dp, vertical = (block * 0.02f).dp)
                     )
                     Spacer(Modifier.height((block * 0.06f).dp))
@@ -256,7 +284,7 @@ private fun QueueLaneCard(lane: QueueLane, scale: Float, modifier: Modifier = Mo
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         row.forEach { ticket ->
-                            Box(Modifier.weight(1f)) {
+                            Box(Modifier.weight(if (ticket.calling) 1.4f else 1f)) {
                                 TicketChip(ticket, badgeSize, numberSize)
                             }
                         }
@@ -278,7 +306,8 @@ private fun LaneCount(label: String, value: Int, blockHeight: Float) {
             color = BoardBlack,
             fontSize = (blockHeight * 0.16f).sp,
             fontWeight = FontWeight.Medium,
-            style = TightText
+            style = TightText,
+            modifier = Modifier.width((blockHeight * 0.40f).dp)
         )
         Spacer(Modifier.width((blockHeight * 0.08f).dp))
         Text(
@@ -315,11 +344,12 @@ private fun TicketChip(ticket: QueueTicket, badgeSize: Float, numberSize: Float)
             }
         }
         Spacer(Modifier.width((numberSize * 0.16f).dp))
+        val shownSize = if (ticket.calling) numberSize * 1.28f else numberSize
         Text(
             ticket.label,
-            color = BoardWhite,
-            fontSize = numberSize.sp,
-            lineHeight = numberSize.sp,
+            color = if (ticket.calling) CallingRed else BoardWhite,
+            fontSize = shownSize.sp,
+            lineHeight = shownSize.sp,
             fontWeight = FontWeight.Black,
             maxLines = 1,
             softWrap = false,
@@ -376,99 +406,124 @@ private fun WaitingPanel(state: QueueBoardUiState, scale: Float, modifier: Modif
 }
 
 @Composable
-private fun BrandPanel(brand: BrandContent, scale: Float, modifier: Modifier = Modifier) {
-    Column(
-        modifier
-            .clip(RoundedCornerShape((22f * scale).dp))
-            .background(PanelGreen)
-            .padding(horizontal = (16f * scale).dp, vertical = (14f * scale).dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            brand.title,
-            color = BoardWhite,
-            fontSize = (28f * scale).sp,
-            fontWeight = FontWeight.Black,
-            textAlign = TextAlign.Center,
-            style = TightText
-        )
-        if (brand.subtitle.isNotBlank()) {
-            Spacer(Modifier.height((8f * scale).dp))
+private fun BrandPanel(brand: BrandContent, modifier: Modifier = Modifier) {
+    BoxWithConstraints(modifier) {
+        val panel = maxHeight.value.coerceAtLeast(1f)
+        val panelWidth = maxWidth.value.coerceAtLeast(1f)
+        val qr = min(panelWidth * 0.62f, panel * 0.36f)
+        val sideCount = brand.sideText.length.coerceAtLeast(1)
+        val sideSize = min(qr / sideCount * 0.82f, panel * 0.028f)
+        Column(
+            Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape((panel * 0.03f).dp))
+                .background(PanelGreen)
+                .padding(horizontal = (panel * 0.028f).dp, vertical = (panel * 0.024f).dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
-                brand.subtitle,
+                brand.title,
                 color = BoardWhite,
-                fontSize = (16f * scale).sp,
+                fontSize = (panel * 0.052f).sp,
+                lineHeight = (panel * 0.06f).sp,
+                fontWeight = FontWeight.Black,
                 textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
                 style = TightText
             )
-        }
-        Spacer(Modifier.height((16f * scale).dp))
-        RemoteImage(
-            url = brand.logoUrl,
-            modifier = Modifier
-                .width((150f * scale).dp)
-                .height((96f * scale).dp)
-                .clip(RoundedCornerShape((4f * scale).dp)),
-            fallback = {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(LogoGray)
+            if (brand.subtitle.isNotBlank()) {
+                Spacer(Modifier.height((panel * 0.014f).dp))
+                Text(
+                    brand.subtitle,
+                    color = BoardWhite,
+                    fontSize = (panel * 0.024f).sp,
+                    lineHeight = (panel * 0.032f).sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TightText
                 )
             }
-        )
-        Spacer(Modifier.weight(1f))
-        Text(
-            brand.scanText,
-            color = BoardWhite,
-            fontSize = (18f * scale).sp,
-            fontWeight = FontWeight.Medium,
-            textAlign = TextAlign.Center,
-            style = TightText
-        )
-        Spacer(Modifier.height((8f * scale).dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                brand.sideText.forEach { character ->
-                    Text(
-                        character.toString(),
-                        color = BoardWhite,
-                        fontSize = (13f * scale).sp,
-                        lineHeight = (15f * scale).sp,
-                        style = TightText
+            Spacer(Modifier.height((panel * 0.018f).dp))
+            RemoteImage(
+                url = brand.logoUrl,
+                modifier = Modifier
+                    .width((panelWidth * 0.58f).dp)
+                    .height((panel * 0.1f).dp)
+                    .clip(RoundedCornerShape((panel * 0.008f).dp)),
+                fallback = {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(LogoGray)
                     )
                 }
-            }
-            Spacer(Modifier.width((8f * scale).dp))
-            if (brand.qrUrl.isNotBlank()) {
-                RemoteImage(
-                    url = brand.qrUrl,
-                    modifier = Modifier
-                        .width((150f * scale).dp)
-                        .aspectRatio(1f),
-                    fallback = { QrMark(Modifier.fillMaxSize()) }
-                )
-            } else {
-                QrMark(Modifier.width((150f * scale).dp))
-            }
-        }
-        Spacer(Modifier.height((12f * scale).dp))
-        Row(
-            Modifier
-                .clip(RoundedCornerShape((20f * scale).dp))
-                .background(PillGreen)
-                .padding(horizontal = (12f * scale).dp, vertical = (5f * scale).dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("🎁", fontSize = (16f * scale).sp)
-            Spacer(Modifier.width((4f * scale).dp))
+            )
+            Spacer(Modifier.weight(1f))
             Text(
-                "排队码截图无效",
+                brand.scanText,
                 color = BoardWhite,
-                fontSize = (15f * scale).sp,
+                fontSize = (panel * 0.03f).sp,
                 fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
                 style = TightText
             )
+            Spacer(Modifier.height((panel * 0.012f).dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (brand.sideText.isNotEmpty()) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        brand.sideText.forEach { character ->
+                            Text(
+                                character.toString(),
+                                color = BoardWhite,
+                                fontSize = sideSize.sp,
+                                lineHeight = (sideSize * 1.05f).sp,
+                                style = TightText
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width((panel * 0.012f).dp))
+                }
+                Box(
+                    Modifier
+                        .width(qr.dp)
+                        .aspectRatio(1f)
+                        .clip(RoundedCornerShape((panel * 0.008f).dp))
+                        .background(BoardWhite)
+                ) {
+                    if (brand.qrUrl.isNotBlank()) {
+                        RemoteImage(
+                            url = brand.qrUrl,
+                            modifier = Modifier.fillMaxSize(),
+                            fallback = { QrMark(Modifier.fillMaxSize()) }
+                        )
+                    } else {
+                        QrMark(Modifier.fillMaxSize())
+                    }
+                }
+            }
+            Spacer(Modifier.height((panel * 0.016f).dp))
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(PillGreen)
+                    .padding(horizontal = (panel * 0.02f).dp, vertical = (panel * 0.008f).dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("🎁", fontSize = (panel * 0.024f).sp)
+                Spacer(Modifier.width((panel * 0.006f).dp))
+                Text(
+                    "排队码截图无效",
+                    color = BoardWhite,
+                    fontSize = (panel * 0.022f).sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    style = TightText
+                )
+            }
         }
     }
 }
