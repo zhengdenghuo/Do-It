@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -45,10 +46,13 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.anzhuo.todo.R
 import com.anzhuo.todo.data.queue.QueueBoardUiState
 import com.anzhuo.todo.data.queue.QueueBoardViewModel
 import com.anzhuo.todo.data.queue.QueueSummaryData
+import com.anzhuo.todo.data.queue.bannerVariant
 import com.anzhuo.todo.data.queue.QueueTableItem
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +64,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.LinkedHashMap
 import kotlin.math.min
 
 private val BoardBlack = Color(0xFF000000)
@@ -70,6 +75,7 @@ private val WaitingGreen = Color(0xFF2F8F5E)
 private val PartyBadge = Color(0xFF143528)
 private val PanelGreen = Color(0xFF5C8C4A)
 private val PillGreen = Color(0xFF3F6A38)
+private val SideAmber = Color(0xFFF6AE47)
 private val LogoGray = Color(0xFFD5D5D5)
 private val BoardWhite = Color(0xFFFFFFFF)
 
@@ -201,21 +207,32 @@ private fun String.toPlainBoardText(title: String): String {
         .joinToString("\n")
 }
 
-private fun QueueSummaryData.toBrand() = BrandContent(
-    title = queueText.ifBlank { "排队" },
-    subtitle = content.toPlainBoardText(queueText),
-    logoUrl = logo,
-    scanText = queueDesc.ifBlank { "排队取号&扫码签到" },
-    sideText = groupText.ifBlank { "过滤空号，排队更快" },
-    qrUrl = if (isOpen == 1 && qrcodeUrl.isNotBlank()) qrcodeUrl else groupQrcode,
-)
+private fun QueueSummaryData.toBrand(): BrandContent {
+    val open = isOpen == 1
+    return BrandContent(
+        logoUrl = logo,
+        shopName = shopName,
+        showBannerImage = bannerShowType != 2,
+        bannerImageUrl = bannerConfig.bannerVariant(isOpen),
+        bannerText = bannerString.bannerVariant(isOpen).toPlainBoardText(""),
+        scanText = if (open) queueTopDesc else groupTopDesc,
+        sideText = if (open) queueLeftDesc else groupLeftDesc,
+        bottomText = if (open) queueDesc else groupText,
+        showNoPhoto = open,
+        qrUrl = if (open) qrcodeUrl else groupQrcode,
+    )
+}
 
 private data class BrandContent(
-    val title: String,
-    val subtitle: String,
     val logoUrl: String,
+    val shopName: String,
+    val showBannerImage: Boolean,
+    val bannerImageUrl: String,
+    val bannerText: String,
     val scanText: String,
     val sideText: String,
+    val bottomText: String,
+    val showNoPhoto: Boolean,
     val qrUrl: String,
 )
 
@@ -410,9 +427,7 @@ private fun BrandPanel(brand: BrandContent, modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier) {
         val panel = maxHeight.value.coerceAtLeast(1f)
         val panelWidth = maxWidth.value.coerceAtLeast(1f)
-        val qr = min(panelWidth * 0.62f, panel * 0.36f)
-        val sideCount = brand.sideText.length.coerceAtLeast(1)
-        val sideSize = min(qr / sideCount * 0.82f, panel * 0.028f)
+        val qr = min(panelWidth * 0.55f, panel * 0.28f)
         Column(
             Modifier
                 .fillMaxSize()
@@ -421,77 +436,109 @@ private fun BrandPanel(brand: BrandContent, modifier: Modifier = Modifier) {
                 .padding(horizontal = (panel * 0.028f).dp, vertical = (panel * 0.024f).dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                brand.title,
-                color = BoardWhite,
-                fontSize = (panel * 0.052f).sp,
-                lineHeight = (panel * 0.06f).sp,
-                fontWeight = FontWeight.Black,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                style = TightText
-            )
-            if (brand.subtitle.isNotBlank()) {
-                Spacer(Modifier.height((panel * 0.014f).dp))
+            if (brand.logoUrl.isNotBlank()) {
+                RemoteImage(
+                    url = brand.logoUrl,
+                    modifier = Modifier
+                        .width((panelWidth * 0.58f).dp)
+                        .height((panel * 0.09f).dp)
+                        .clip(RoundedCornerShape((panel * 0.008f).dp)),
+                    fallback = {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(LogoGray)
+                        )
+                    }
+                )
+            }
+            if (brand.shopName.isNotBlank()) {
+                Spacer(Modifier.height((panel * 0.012f).dp))
                 Text(
-                    brand.subtitle,
+                    brand.shopName,
                     color = BoardWhite,
-                    fontSize = (panel * 0.024f).sp,
-                    lineHeight = (panel * 0.032f).sp,
+                    fontSize = (panel * 0.04f).sp,
+                    lineHeight = (panel * 0.048f).sp,
+                    fontWeight = FontWeight.Black,
                     textAlign = TextAlign.Center,
-                    maxLines = 4,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                     style = TightText
                 )
             }
-            Spacer(Modifier.height((panel * 0.018f).dp))
-            RemoteImage(
-                url = brand.logoUrl,
-                modifier = Modifier
-                    .width((panelWidth * 0.58f).dp)
-                    .height((panel * 0.1f).dp)
-                    .clip(RoundedCornerShape((panel * 0.008f).dp)),
-                fallback = {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .background(LogoGray)
-                    )
-                }
-            )
-            Spacer(Modifier.weight(1f))
-            Text(
-                brand.scanText,
-                color = BoardWhite,
-                fontSize = (panel * 0.03f).sp,
-                fontWeight = FontWeight.Medium,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                style = TightText
-            )
-            Spacer(Modifier.height((panel * 0.012f).dp))
+            if (brand.showBannerImage && brand.bannerImageUrl.isNotBlank()) {
+                Spacer(Modifier.weight(1f))
+                RemoteImage(
+                    url = brand.bannerImageUrl,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height((panel * 0.18f).dp)
+                        .clip(RoundedCornerShape((panel * 0.012f).dp)),
+                    fallback = {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(LogoGray)
+                        )
+                    }
+                )
+                Spacer(Modifier.weight(1f))
+            } else if (!brand.showBannerImage && brand.bannerText.isNotBlank()) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    brand.bannerText,
+                    color = BoardWhite,
+                    fontSize = (panel * 0.026f).sp,
+                    lineHeight = (panel * 0.034f).sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 6,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TightText
+                )
+                Spacer(Modifier.weight(1f))
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            if (brand.scanText.isNotBlank()) {
+                Text(
+                    brand.scanText,
+                    color = BoardWhite,
+                    fontSize = (panel * 0.03f).sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = TightText
+                )
+                Spacer(Modifier.height((panel * 0.012f).dp))
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (brand.sideText.isNotEmpty()) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    val count = brand.sideText.length
+                    val sideSize = qr * 0.58f / count
+                    Column(
+                        Modifier
+                            .height(qr.dp)
+                            .background(SideAmber)
+                            .padding(horizontal = (qr * 0.045f).dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
                         brand.sideText.forEach { character ->
                             Text(
                                 character.toString(),
-                                color = BoardWhite,
+                                color = BoardBlack,
                                 fontSize = sideSize.sp,
-                                lineHeight = (sideSize * 1.05f).sp,
+                                lineHeight = sideSize.sp,
                                 style = TightText
                             )
                         }
                     }
-                    Spacer(Modifier.width((panel * 0.012f).dp))
                 }
                 Box(
                     Modifier
                         .width(qr.dp)
                         .aspectRatio(1f)
-                        .clip(RoundedCornerShape((panel * 0.008f).dp))
                         .background(BoardWhite)
                 ) {
                     if (brand.qrUrl.isNotBlank()) {
@@ -505,27 +552,52 @@ private fun BrandPanel(brand: BrandContent, modifier: Modifier = Modifier) {
                     }
                 }
             }
-            Spacer(Modifier.height((panel * 0.016f).dp))
-            Row(
-                Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(PillGreen)
-                    .padding(horizontal = (panel * 0.02f).dp, vertical = (panel * 0.008f).dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("🎁", fontSize = (panel * 0.024f).sp)
-                Spacer(Modifier.width((panel * 0.006f).dp))
-                Text(
-                    "排队码截图无效",
-                    color = BoardWhite,
-                    fontSize = (panel * 0.022f).sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    style = TightText
-                )
+            if (brand.bottomText.isNotBlank()) {
+                Spacer(Modifier.height((panel * 0.016f).dp))
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(PillGreen)
+                        .padding(horizontal = (panel * 0.02f).dp, vertical = (panel * 0.008f).dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (brand.showNoPhoto) {
+                        Image(
+                            painterResource(R.drawable.ic_queue_gift),
+                            contentDescription = null,
+                            modifier = Modifier.size((panel * 0.032f).dp)
+                        )
+                        Spacer(Modifier.width((panel * 0.006f).dp))
+                    }
+                    Text(
+                        brand.bottomText,
+                        color = BoardWhite,
+                        fontSize = (panel * 0.022f).sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = TightText
+                    )
+                }
             }
         }
     }
+}
+
+private object RemoteImageCache {
+    private const val MAX_ENTRIES = 16
+    private val lock = Any()
+    private val images = object : LinkedHashMap<String, ImageBitmap>(MAX_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?) = size > MAX_ENTRIES
+    }
+
+    fun get(url: String): ImageBitmap? = synchronized(lock) { images[cacheKey(url)] }
+
+    fun put(url: String, bitmap: ImageBitmap) {
+        synchronized(lock) { images[cacheKey(url)] = bitmap }
+    }
+
+    private fun cacheKey(url: String) = url.substringBefore('?')
 }
 
 @Composable
@@ -534,26 +606,33 @@ private fun RemoteImage(
     modifier: Modifier = Modifier,
     fallback: @Composable () -> Unit,
 ) {
-    var image by remember(url) { mutableStateOf<ImageBitmap?>(null) }
+    var image by remember { mutableStateOf(RemoteImageCache.get(url)) }
     LaunchedEffect(url) {
-        image = if (url.isBlank()) {
-            null
-        } else {
-            withContext(Dispatchers.IO) {
-                runCatching {
-                    val connection = URL(url).openConnection() as HttpURLConnection
-                    connection.connectTimeout = 8_000
-                    connection.readTimeout = 8_000
-                    connection.inputStream.use { BitmapFactory.decodeStream(it) }
-                }.getOrNull()?.asImageBitmap()
-            }
+        if (url.isBlank()) return@LaunchedEffect
+        val cached = RemoteImageCache.get(url)
+        if (cached != null) {
+            image = cached
+            return@LaunchedEffect
+        }
+        val loaded = withContext(Dispatchers.IO) {
+            runCatching {
+                val connection = URL(url).openConnection() as HttpURLConnection
+                connection.connectTimeout = 8_000
+                connection.readTimeout = 8_000
+                connection.inputStream.use { BitmapFactory.decodeStream(it) }
+            }.getOrNull()?.asImageBitmap()
+        }
+        if (loaded != null) {
+            RemoteImageCache.put(url, loaded)
+            image = loaded
         }
     }
-    if (image == null) {
+    val shown = image
+    if (shown == null) {
         Box(modifier) { fallback() }
     } else {
         Image(
-            bitmap = image!!,
+            bitmap = shown,
             contentDescription = null,
             modifier = modifier,
             contentScale = ContentScale.Fit
