@@ -23,6 +23,7 @@ import at.co.schwaerzler.maximilian.doit.data.AppPreferences
 import at.co.schwaerzler.maximilian.doit.data.appPreferencesDataStore
 import at.co.schwaerzler.maximilian.doit.data.db.TodoDatabase
 import at.co.schwaerzler.maximilian.doit.data.db.TodoRepository
+import at.co.schwaerzler.maximilian.doit.pos.CashierRepository
 import at.co.schwaerzler.maximilian.doit.util.applyNightMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +41,8 @@ class DoItApplication : Application() {
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val appPreferences by lazy { AppPreferences(appPreferencesDataStore, applicationScope) }
+
+    val cashierRepository by lazy { CashierRepository(this) }
 
     override fun onCreate() {
         super.onCreate()

@@ -13,7 +13,7 @@
   ~    See the License for the specific language governing permissions and
   ~    limitations under the License.
   --><resources>
-    <string name="app_name" translatable="false">Do It</string>
+    <string name="app_name" translatable="false">鲜主收银</string>
     <plurals name="todos_selected_template">
         <item quantity="one">%1$d selected</item>
         <item quantity="other">%1$d selected</item>

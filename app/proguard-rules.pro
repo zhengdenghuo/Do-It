@@ -33,3 +33,8 @@
 # Class.forName() + Class.newInstance(). WorkManager's bundled consumer rules keep the
 # class name but do not protect the no-arg constructor, so R8 removes it.
 -keep class * extends androidx.work.InputMerger { <init>(); }
+
+-keep class com.magicrf.uhfreaderlib.reader.ReaderPort {
+    native <methods>;
+    java.io.FileDescriptor mFd;
+}

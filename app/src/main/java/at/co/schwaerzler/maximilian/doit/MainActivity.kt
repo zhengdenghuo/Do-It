@@ -20,20 +20,14 @@ import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
-import androidx.compose.runtime.getValue
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import at.co.schwaerzler.maximilian.doit.ui.navigation.AppNavigation
-import at.co.schwaerzler.maximilian.doit.ui.theme.DoItTheme
+import at.co.schwaerzler.maximilian.doit.ui.cashier.CashierApp
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            val useDynamicColors by (application as DoItApplication).appPreferences.useDynamicColors.collectAsStateWithLifecycle(true)
-            DoItTheme(dynamicColor = useDynamicColors) {
-                AppNavigation()
-            }
+            CashierApp()
         }
     }
 }

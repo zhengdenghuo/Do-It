@@ -62,6 +62,10 @@ android {
         versionName = "1.7"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += listOf("armeabi-v7a")
+        }
     }
 
     buildTypes {
