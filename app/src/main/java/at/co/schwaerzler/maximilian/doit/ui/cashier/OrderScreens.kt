@@ -1,7 +1,13 @@
 package at.co.schwaerzler.maximilian.doit.ui.cashier
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -10,10 +16,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +31,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -39,35 +51,49 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import at.co.schwaerzler.maximilian.doit.R
 import at.co.schwaerzler.maximilian.doit.pos.DiningTable
+import at.co.schwaerzler.maximilian.doit.pos.ConsumptionGroup
 import at.co.schwaerzler.maximilian.doit.pos.FinishedOrder
 import at.co.schwaerzler.maximilian.doit.pos.GroupCouponType
 import at.co.schwaerzler.maximilian.doit.pos.MemberCoupon
 import at.co.schwaerzler.maximilian.doit.pos.OrderSummary
 import at.co.schwaerzler.maximilian.doit.pos.PayMethod
+import at.co.schwaerzler.maximilian.doit.pos.PaymentLine
 import at.co.schwaerzler.maximilian.doit.pos.SettleOrder
 import at.co.schwaerzler.maximilian.doit.pos.TableOrder
 import at.co.schwaerzler.maximilian.doit.pos.OrderLine
 import at.co.schwaerzler.maximilian.doit.pos.cashierField
 import kotlin.math.roundToInt
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 
 @Composable
@@ -76,6 +102,7 @@ fun OrderDetailScreen(
     tableNo: String,
     onBack: () -> Unit,
     onMenu: () -> Unit,
+    onGift: (orderId: String) -> Unit,
     onSettle: (orderId: String, supplierId: String, userId: String) -> Unit,
     onSwitch: (orderId: String) -> Unit,
     onMerge: (orderId: String) -> Unit,
@@ -92,6 +119,11 @@ fun OrderDetailScreen(
     var returnPrint by remember { mutableStateOf(false) }
     var editingGuests by remember { mutableStateOf(false) }
     var closing by remember { mutableStateOf(false) }
+    var clearPlatesClosesOrder by remember { mutableStateOf<Boolean?>(null) }
+    var clearingPlates by remember { mutableStateOf(false) }
+    var checkingAverage by remember { mutableStateOf(false) }
+    var seasoningWarning by remember { mutableStateOf<TableOrder?>(null) }
+    var averageWarning by remember { mutableStateOf<TableOrder?>(null) }
     var more by remember { mutableStateOf(false) }
     var pickingReturn by remember { mutableStateOf(false) }
     var openSwipe by remember { mutableStateOf<String?>(null) }
@@ -112,6 +144,22 @@ fun OrderDetailScreen(
     fun requireOrder(block: (orderId: String) -> Unit) {
         val id = current?.orderId.orEmpty()
         if (id.isBlank()) vm.repository.toast("还没有订单") else block(id)
+    }
+
+    fun checkAverage(snapshot: TableOrder) {
+        if (checkingAverage) return
+        checkingAverage = true
+        scope.launch {
+            try {
+                when (vm.repository.isLowAverageSpend(snapshot.orderId).orToast(vm.repository)) {
+                    true -> averageWarning = snapshot
+                    false -> onSettle(snapshot.orderId, snapshot.shopSupplierId, snapshot.userId)
+                    null -> Unit
+                }
+            } finally {
+                checkingAverage = false
+            }
+        }
     }
     fun beginReturn(line: at.co.schwaerzler.maximilian.doit.pos.OrderLine) {
         returnQty = line.qty.substringBefore(".").ifBlank { "1" }
@@ -171,13 +219,18 @@ fun OrderDetailScreen(
                         OrderDockAction("单品转台") { requireOrder(onMerge) }
                         Box(Modifier.width(84.dp))
                         OrderDockAction("换台") { requireOrder(onSwitch) }
-                        OrderDockAction("结账") {
-                            requireOrder { onSettle(it, current?.shopSupplierId.orEmpty(), current?.userId.orEmpty()) }
+                        OrderDockAction(if (checkingAverage) "核对中" else "结账") {
+                            val snapshot = current
+                            when {
+                                snapshot == null || snapshot.orderId.isBlank() -> vm.repository.toast("还没有订单")
+                                snapshot.hasSeasoningWarning -> seasoningWarning = snapshot
+                                else -> checkAverage(snapshot)
+                            }
                         }
                     }
                     ScanDockButton(Modifier.align(Alignment.TopCenter).padding(top = 18.dp)) { askScan = true }
                     Row(Modifier.align(Alignment.BottomStart).padding(start = 8.dp, bottom = 4.dp)) {
-                        OrderDockAction("赠送", onMenu)
+                        OrderDockAction("赠送") { requireOrder(onGift) }
                         OrderDockAction("退菜") {
                             val lines = current?.lines.orEmpty()
                             when {
@@ -209,6 +262,19 @@ fun OrderDetailScreen(
                             }
                         }) { Text("打印") }
                         TextButton(onClick = { closing = true }) { Text("关台") }
+                        TextButton(
+                            enabled = !clearingPlates && current?.lines?.any { it.scanned } == true,
+                            onClick = {
+                                clearingPlates = true
+                                scope.launch {
+                                    try {
+                                        clearPlatesClosesOrder = vm.repository.clearPlatesClosesOrder(tableId).orToast(vm.repository)
+                                    } finally {
+                                        clearingPlates = false
+                                    }
+                                }
+                            },
+                        ) { Text("清盘") }
                     }
                 }
             }
@@ -296,6 +362,58 @@ fun OrderDetailScreen(
                 }) { Text("确定") }
             },
             dismissButton = { TextButton(onClick = { askScan = false }) { Text("取消") } },
+        )
+    }
+    clearPlatesClosesOrder?.let { closesOrder ->
+        AlertDialog(
+            onDismissRequest = { if (!clearingPlates) clearPlatesClosesOrder = null },
+            title = { Text("清盘") },
+            text = { Text(if (closesOrder) "清盘后没有剩余菜品，订单将关闭。确定继续？" else "确定清除该桌扫盘加入的菜品？") },
+            confirmButton = {
+                TextButton(enabled = !clearingPlates, onClick = {
+                    clearingPlates = true
+                    scope.launch {
+                        try {
+                            if (vm.repository.clearPlates(tableId).orToast(vm.repository) != null) {
+                                vm.repository.toast("清盘成功")
+                                clearPlatesClosesOrder = null
+                                if (closesOrder) onBack() else load()
+                            }
+                        } finally {
+                            clearingPlates = false
+                        }
+                    }
+                }) { Text(if (clearingPlates) "处理中" else "确定") }
+            },
+            dismissButton = { TextButton(onClick = { clearPlatesClosesOrder = null }, enabled = !clearingPlates) { Text("取消") } },
+        )
+    }
+    seasoningWarning?.let { snapshot ->
+        AlertDialog(
+            onDismissRequest = { seasoningWarning = null },
+            title = { Text("核对调料费") },
+            text = { Text("当前锅底数量大于调料数量。请核对调料费。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    seasoningWarning = null
+                    checkAverage(snapshot)
+                }) { Text("继续结账") }
+            },
+            dismissButton = { TextButton(onClick = { seasoningWarning = null }) { Text("返回调整") } },
+        )
+    }
+    averageWarning?.let { snapshot ->
+        AlertDialog(
+            onDismissRequest = { averageWarning = null },
+            title = { Text("核对订单金额") },
+            text = { Text("当前订单人均低于 70 元。请确认金额是否正确。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    averageWarning = null
+                    onSettle(snapshot.orderId, snapshot.shopSupplierId, snapshot.userId)
+                }) { Text("确认并结账") }
+            },
+            dismissButton = { TextButton(onClick = { averageWarning = null }) { Text("返回调整") } },
         )
     }
     if (pickingReturn) {
@@ -494,10 +612,23 @@ private fun plainAmount(value: String): String {
 }
 
 @Composable
-fun SettleScreen(orderId: String, supplierId: String, userId: String, onBack: () -> Unit, onDone: () -> Unit) {
+fun SettleScreen(
+    orderId: String,
+    supplierId: String,
+    userId: String,
+    tableId: String,
+    tableLabel: String,
+    onBack: () -> Unit,
+    onExternalCoupon: (SettleOrder) -> Unit,
+    onDone: () -> Unit,
+) {
     val vm = cashierViewModel()
+    val repository = vm.repository
     val scope = rememberCoroutineScope()
     var order by remember { mutableStateOf<SettleOrder?>(null) }
+    var loadingOrder by remember { mutableStateOf(false) }
+    var orderFailed by remember { mutableStateOf(false) }
+    var paymentMethodsFailed by remember { mutableStateOf(false) }
     var methods by remember { mutableStateOf<List<PayMethod>>(emptyList()) }
     var remark by remember { mutableStateOf("") }
     var quota by remember { mutableStateOf("") }
@@ -508,190 +639,615 @@ fun SettleScreen(orderId: String, supplierId: String, userId: String, onBack: ()
     var allowQuota by remember { mutableStateOf(false) }
     var pendingTrade by remember { mutableStateOf("") }
     var paying by remember { mutableStateOf(false) }
-    var couponKind by remember { mutableStateOf("") }
-    var accounts by remember { mutableStateOf<List<at.co.schwaerzler.maximilian.doit.pos.MemberAccount>>(emptyList()) }
+    var showConsumption by remember(orderId) { mutableStateOf(false) }
+    var showQuota by remember(orderId) { mutableStateOf(false) }
+    var editingRemark by remember(orderId) { mutableStateOf(false) }
+    var remarkDraft by remember(orderId) { mutableStateOf("") }
+    var submittingQuota by remember(orderId) { mutableStateOf(false) }
+    var finishing by remember(orderId) { mutableStateOf(false) }
+    var settlementLocked by remember(orderId) { mutableStateOf(false) }
+    var lockFailed by remember(orderId) { mutableStateOf(false) }
+    var lockAttempt by remember(orderId) { mutableIntStateOf(0) }
+    var otherCashier by remember(orderId) { mutableStateOf<String?>(null) }
+    var proceedWithOtherCashier by remember(orderId) { mutableStateOf(false) }
+    var couponPage by remember(orderId) { mutableStateOf<Boolean?>(null) }
+    var memberCouponCount by remember(orderId) { mutableIntStateOf(0) }
+    var packCouponCount by remember(orderId) { mutableIntStateOf(0) }
+    var paymentToRemove by remember(orderId) { mutableStateOf<PaymentLine?>(null) }
+    var removingPayment by remember(orderId) { mutableStateOf(false) }
+    val scanPaymentSelected = settlementLocked && selected?.type == "scan" && !paying && pendingTrade.isBlank()
+    if (scanPaymentSelected) {
+        ReceivePaymentBarcode { scanned -> authCode = scanned }
+    }
+
+    BackHandler(enabled = paying || finishing) {}
 
     fun load() {
+        if (loadingOrder) return
+        loadingOrder = true
+        orderFailed = false
+        paymentMethodsFailed = false
+        order = null
         scope.launch {
-            order = vm.repository.orderInfo(orderId, supplierId, userId).orToast(vm.repository)
-            val tableId = order?.tableId.orEmpty()
-            if (tableId.isNotBlank()) methods = vm.repository.paymentMethods(tableId).getOrElse { emptyList() }
-            cash = order?.payPrice.orEmpty()
+            try {
+                val loaded = repository.orderInfo(orderId, supplierId, userId).orToast(repository)
+                if (loaded == null) {
+                    orderFailed = true
+                    return@launch
+                }
+                val resolvedTableId = tableId.ifBlank { loaded.tableId }
+                val options = if (resolvedTableId.isNotBlank()) {
+                    repository.paymentMethods(resolvedTableId).orToast(repository)
+                } else {
+                    null
+                }
+                methods = options.orEmpty()
+                paymentMethodsFailed = options == null
+                if (selected !in methods) selected = null
+                cash = loaded.payPrice
+                order = loaded.copy(tableId = resolvedTableId)
+            } finally {
+                loadingOrder = false
+            }
         }
     }
 
-    LaunchedEffect(orderId) {
-        load()
-        val rights = vm.repository.permissions().getOrNull()
-        if (rights != null) allowQuota = rights.any { it.type == "quota" && it.allowed }
+    LaunchedEffect(orderId, lockAttempt) {
+        lockFailed = false
+        val owner = repository.otherSettlementCashier(orderId)
+        if (owner.isFailure) {
+            owner.orToast(repository)
+            lockFailed = true
+            return@LaunchedEffect
+        }
+        val cashier = owner.getOrNull()
+        if (cashier != null && !proceedWithOtherCashier) {
+            otherCashier = cashier
+            return@LaunchedEffect
+        }
+        proceedWithOtherCashier = false
+        var acquired = false
+        try {
+            withContext(NonCancellable) {
+                acquired = repository.lockSettlement(orderId).orToast(repository) != null
+            }
+            if (!acquired) {
+                lockFailed = true
+                return@LaunchedEffect
+            }
+            settlementLocked = true
+            load()
+            allowQuota = repository.permissions().getOrNull().orEmpty().any { it.type == "quota" && it.allowed }
+            awaitCancellation()
+        } finally {
+            if (acquired) {
+                withContext(NonCancellable) { repository.unlockSettlement(orderId).orToast(repository) }
+            }
+        }
     }
     val current = order
+    LaunchedEffect(current) {
+        if (current != null && current.tableId.isNotBlank()) {
+            memberCouponCount = repository.memberCoupons(current.tableId, orderId, current.shopSupplierId)
+                .getOrNull().orEmpty().sumOf { it.coupons.size }
+            packCouponCount = repository.packCoupons(current.tableId, orderId, current.shopSupplierId)
+                .getOrNull().orEmpty().sumOf { it.coupons.size }
+        }
+    }
+    val isPack = couponPage
+    if (isPack != null && current != null) {
+        MemberCouponScreen(
+            order = current,
+            isPack = isPack,
+            onBack = { couponPage = null },
+            onApplied = {
+                couponPage = null
+                load()
+            },
+        )
+        return
+    }
 
-    Scaffold(topBar = { CashierTopBar("结账", onBack = onBack) }) { padding ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item {
-                Text("商品总价 ${money(current?.totalPrice ?: current?.orderPrice.orEmpty())}")
-                Text("优惠 ${money(current?.discount.orEmpty())}")
-                Text("应收 ${money(current?.payPrice.orEmpty())}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                Text("实收 ${money(current?.realMoney.orEmpty())}    找零 ${money(current?.giveChange.orEmpty())}")
-                HorizontalDivider()
-                Text("订单明细")
-            }
-            items(current?.lines.orEmpty()) { line ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("${line.name} × ${line.qty}", Modifier.weight(1f))
-                    Text(money(line.total))
-                }
-            }
-            item {
-                Text("结算明细")
-                current?.payments.orEmpty().forEach { pay ->
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Text("${pay.name.ifBlank { pay.type }}  ${money(pay.money)}  ×${pay.num.ifBlank { "1" }}", Modifier.weight(1f))
-                        TextButton(onClick = {
-                            scope.launch {
-                                vm.repository.refundPayment(pay).orToast(vm.repository)?.let {
-                                    vm.repository.toast("已撤销")
-                                    load()
-                                }
-                            }
-                        }) { Text("撤销") }
+    Scaffold(
+        containerColor = SettlementPanel,
+        topBar = {
+            SettlementHeader(
+                title = tableLabel.ifBlank { "结账" },
+                onBack = { if (!paying && !finishing) onBack() },
+                onPrint = current?.let { snapshot ->
+                    {
+                        scope.launch {
+                            repository.printPreview(orderId, snapshot.payments).orToast(repository)
+                                ?.let { repository.toast("预结单已发送") }
+                        }
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = {
-                        scope.launch {
-                            vm.repository.printPreview(orderId, current?.payments.orEmpty()).orToast(vm.repository)
-                                ?.let { vm.repository.toast("预结单已发送") }
+            )
+        },
+        bottomBar = {
+            if (current != null) {
+                val remaining = current.payPrice.toBigDecimalOrNull()
+                val canClear = remaining?.signum() == 0
+                Row(
+                    Modifier.fillMaxWidth().background(SettlementPanel).navigationBarsPadding()
+                        .padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                        if (allowQuota) {
+                            SettlementAction(
+                                label = "手工定额",
+                                primary = false,
+                                modifier = Modifier.weight(1f),
+                                enabled = !paying && !finishing && pendingTrade.isBlank(),
+                                onClick = { showQuota = true },
+                            )
                         }
-                    }) { Text("打印预结单") }
-                    TextButton(onClick = {
-                        scope.launch {
-                            couponKind = "member"
-                            accounts = vm.repository.memberCoupons(current?.tableId.orEmpty(), orderId, current?.shopSupplierId.orEmpty())
-                                .orToast(vm.repository).orEmpty()
-                        }
-                    }) { Text("会员券") }
-                    TextButton(onClick = {
-                        scope.launch {
-                            couponKind = "pack"
-                            accounts = vm.repository.packCoupons(current?.tableId.orEmpty(), orderId, current?.shopSupplierId.orEmpty())
-                                .orToast(vm.repository).orEmpty()
-                        }
-                    }) { Text("套餐券") }
+                        SettlementAction(
+                            label = when {
+                                finishing -> "正在清台"
+                                canClear -> "清台"
+                                remaining == null -> "应收金额待确认"
+                                else -> "还需收款  ${money(current.payPrice)}"
+                            },
+                            primary = true,
+                            modifier = Modifier.weight(3f),
+                            enabled = canClear && !paying && !finishing && pendingTrade.isBlank(),
+                            onClick = {
+                                if (!finishing) {
+                                    finishing = true
+                                    scope.launch {
+                                        try {
+                                            repository.finishPay(current, remark, quotaRemark).orToast(repository)?.let {
+                                                repository.toast("结账成功")
+                                                onDone()
+                                            }
+                                        } finally {
+                                            finishing = false
+                                        }
+                                    }
+                                }
+                            },
+                        )
                 }
-                OutlinedTextField(remark, { remark = it }, Modifier.fillMaxWidth(), label = { Text("结算备注") })
-                Text("结算方式")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    methods.forEach { method ->
-                        FilterChip(
-                            selected = selected == method,
-                            onClick = { selected = method },
-                            label = { Text(method.name.ifBlank { method.type }) },
+            }
+        },
+    ) { padding ->
+        if (!settlementLocked) {
+            Column(Modifier.padding(padding).padding(16.dp)) {
+                if (lockFailed) {
+                    TextButton(onClick = { lockAttempt++ }) { Text("获取结账权限失败，重试") }
+                } else {
+                    Text("正在确认订单结账状态")
+                }
+            }
+            return@Scaffold
+        }
+        if (current == null) {
+            Column(Modifier.padding(padding).padding(16.dp)) {
+                if (orderFailed) {
+                    Text("未能读取结账明细")
+                    TextButton(onClick = ::load, enabled = !loadingOrder) { Text("重试") }
+                } else {
+                    Text("正在读取结账明细")
+                }
+            }
+            return@Scaffold
+        }
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(start = 18.5.dp, end = 18.5.dp, top = 6.dp, bottom = 6.dp),
+        ) {
+            item {
+                SettlementDetailLink("消费明细", "共${current.productNum.ifBlank { current.lines.size.toString() }}件", alignEnd = false) {
+                    showConsumption = true
+                }
+                SettlementDetailLink("结算备注", remark.ifBlank { "无备注" }, alignEnd = true) {
+                    remarkDraft = remark
+                    editingRemark = true
+                }
+                SettlementAmountRow("商品总价", current.totalPrice.ifBlank { current.orderPrice }, Modifier.padding(top = 30.5.dp))
+                SettlementCouponRow(current.discount, memberCouponCount) {
+                    if (!paying && !finishing && pendingTrade.isBlank()) couponPage = false
+                }
+                SettlementAmountRow("应收", current.receivable.ifBlank { current.payPrice })
+                SettlementAmountRow("找零", money(current.giveChange), Modifier.padding(top = 14.dp))
+            }
+            item {
+                Text("结算明细", Modifier.padding(start = 4.dp, top = 49.dp, bottom = 4.dp), color = SettlementText, fontSize = 15.sp)
+                current.payments.forEach { pay ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier.weight(1f).heightIn(min = 43.dp).background(Color.White, RoundedCornerShape(4.dp)).padding(horizontal = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(pay.name.ifBlank { pay.type }, Modifier.weight(1f), color = SettlementText, fontSize = 13.sp)
+                            Text(money(pay.money), color = SettlementText, fontSize = 13.sp)
+                        }
+                        Image(
+                            painterResource(R.drawable.ic_settlement_remove), contentDescription = "撤销${pay.name}",
+                            modifier = Modifier.size(49.dp)
+                                .clickable(enabled = !paying && !finishing && pendingTrade.isBlank()) { paymentToRemove = pay }
+                                .padding(15.7.dp),
                         )
                     }
                 }
-                val method = selected
-                if (method?.type == "cash") {
-                    OutlinedTextField(cash, { cash = it }, Modifier.fillMaxWidth(), label = { Text("收款金额") })
-                    Button(onClick = {
-                        scope.launch {
-                            vm.repository.addCashSettle(orderId, method.settleType, cash, "13").orToast(vm.repository)
-                                ?.let { vm.repository.toast("已记入现金"); load() }
-                        }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("确认现金") }
+                Text(
+                    "支付方式", Modifier.padding(top = 39.dp).heightIn(min = 29.dp),
+                    color = SettlementText, fontSize = 13.sp,
+                )
+                if (paymentMethodsFailed) {
+                    TextButton(onClick = ::load, enabled = !loadingOrder) { Text("支付方式加载失败，重试") }
                 }
-                if (method?.type == "scan") {
-                    OutlinedTextField(cash, { cash = it }, Modifier.fillMaxWidth(), label = { Text("收款金额") })
-                    OutlinedTextField(authCode, { authCode = it }, Modifier.fillMaxWidth(), label = { Text("扫码支付") })
-                    Button(onClick = {
-                        scope.launch {
-                            paying = true
-                            try {
-                                val result = vm.repository.scanPay(orderId, cash, authCode.trim()).orToast(vm.repository) ?: return@launch
-                                val trade = result.outTradeNo
-                                if (trade.isBlank()) {
-                                    vm.repository.toast(result.message.ifBlank { "支付已提交" })
-                                    load()
-                                    return@launch
-                                }
-                                pendingTrade = trade
-                                repeat(40) {
-                                    if (vm.repository.scanPayQuery(trade).isSuccess) {
-                                        pendingTrade = ""
-                                        vm.repository.toast("支付成功")
-                                        onDone()
-                                        return@launch
+                methods.chunked(3).forEach { row ->
+                    Row(Modifier.fillMaxWidth().padding(bottom = 5.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        row.forEach { method ->
+                            SettlementPaymentCard(
+                                method = method,
+                                available = packCouponCount,
+                                modifier = Modifier.weight(1f),
+                                enabled = !paying && !finishing && pendingTrade.isBlank() &&
+                                    current.payPrice.toBigDecimalOrNull()?.signum() == 1,
+                                onClick = {
+                                    when (method.type) {
+                                        "cash", "scan" -> {
+                                            cash = current.payPrice
+                                            authCode = ""
+                                            selected = method
+                                        }
+                                        "inner" -> couponPage = true
+                                        "out" -> onExternalCoupon(current)
+                                        else -> repository.toast("暂不支持该付款方式")
                                     }
-                                    delay(3000)
-                                }
-                                vm.repository.toast("支付结果未确认")
-                                load()
-                            } finally {
-                                paying = false
-                            }
+                                },
+                            )
                         }
-                    }, enabled = !paying, modifier = Modifier.fillMaxWidth()) { Text(if (paying) "正在查询支付结果" else "扫码收款") }
-                    if (paying && pendingTrade.isNotBlank()) Text("支付单号 $pendingTrade")
-                }
-                if (method?.type == "inner" || method?.type == "out") {
-                    Text(if (method.type == "inner") "会员券和套餐券在上方列表里选择" else "外部券请到验券页，先查券再核销")
-                }
-                if (allowQuota) {
-                    OutlinedTextField(quota, { quota = it }, Modifier.fillMaxWidth(), label = { Text("手工定额金额") })
-                    OutlinedTextField(quotaRemark, { quotaRemark = it }, Modifier.fillMaxWidth(), label = { Text("定额备注") })
-                    Button(onClick = {
-                        scope.launch {
-                            vm.repository.addCashSettle(orderId, "1", quota, "1").orToast(vm.repository)
-                                ?.let { vm.repository.toast("已记入手工定额"); load() }
-                        }
-                    }, modifier = Modifier.fillMaxWidth()) { Text("手工定额") }
-                }
-                Button(onClick = {
-                    val snapshot = current ?: return@Button
-                    scope.launch {
-                        vm.repository.finishPay(snapshot, remark, quotaRemark).orToast(vm.repository)?.let {
-                            vm.repository.toast("结账成功")
-                            onDone()
-                        }
+                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
                     }
-                }, modifier = Modifier.fillMaxWidth()) { Text("清台结账") }
+                }
             }
         }
     }
-    if (couponKind.isNotBlank()) {
+    otherCashier?.let { cashier ->
         AlertDialog(
-            onDismissRequest = { couponKind = "" },
-            title = { Text(if (couponKind == "pack") "套餐券" else "会员券") },
+            onDismissRequest = onBack,
+            title = { Text("订单正在结账") },
+            text = { Text("$cashier 正在结账。是否继续请求结账？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    otherCashier = null
+                    proceedWithOtherCashier = true
+                    lockAttempt++
+                }) { Text("继续") }
+            },
+            dismissButton = { TextButton(onClick = onBack) { Text("返回") } },
+        )
+    }
+    if (showConsumption && current != null) {
+        ConsumptionDetailsDialog(orderId, current.payments, onDismiss = { showConsumption = false })
+    }
+    paymentToRemove?.let { payment ->
+        AlertDialog(
+            onDismissRequest = { if (!removingPayment) paymentToRemove = null },
+            title = { Text("撤销结算") },
+            text = { Text("确定撤销 ${payment.name.ifBlank { payment.type }} ${money(payment.money)}？") },
+            confirmButton = {
+                TextButton(
+                    enabled = !removingPayment,
+                    onClick = {
+                        removingPayment = true
+                        scope.launch {
+                            try {
+                                if (repository.refundPayment(payment).orToast(repository) != null) {
+                                    paymentToRemove = null
+                                    repository.toast("已撤销")
+                                    load()
+                                }
+                            } finally {
+                                removingPayment = false
+                            }
+                        }
+                    },
+                ) { Text(if (removingPayment) "处理中" else "确定") }
+            },
+            dismissButton = { TextButton(onClick = { paymentToRemove = null }, enabled = !removingPayment) { Text("取消") } },
+        )
+    }
+    val method = selected
+    if (method != null && current != null) {
+        val isScan = method.type == "scan"
+        val editing = !paying && pendingTrade.isBlank()
+        SettlementPaymentWindow(
+            canDismiss = editing,
+            onDismissRequest = { if (editing) selected = null },
+            title = method.name.ifBlank { if (isScan) "扫码支付" else "现金" },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (accounts.isEmpty()) Text("没有可用的券")
-                    accounts.forEach { account ->
-                        Text("${account.name}  ${account.mobile}", fontWeight = FontWeight.Bold)
-                        account.coupons.forEach { coupon ->
-                            TextButton(onClick = {
-                                val settleValue = when {
-                                    couponKind == "pack" -> "11"
-                                    coupon.settleType == "3" -> "3"
-                                    else -> "2"
-                                }
-                                couponKind = ""
-                                scope.launch {
-                                    vm.repository.applyCoupon(orderId, settleValue, coupon).orToast(vm.repository)
-                                        ?.let { vm.repository.toast("已使用${coupon.name}"); load() }
-                                }
-                            }) { Text("${coupon.name}  ${money(coupon.money)}") }
-                        }
+                    if (isScan && pendingTrade.isBlank()) {
+                        OutlinedTextField(
+                            authCode, { authCode = it.trim() }, Modifier.fillMaxWidth(),
+                            enabled = editing,
+                            label = { Text("付款码") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            singleLine = true,
+                        )
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 10.dp),
+                        horizontalArrangement = if (isScan) Arrangement.Center else Arrangement.Start,
+                    ) {
+                        Text("当前还需收款：", color = SettlementText, fontSize = 14.sp)
+                        Text(money(current.payPrice), color = SettlementRed, fontSize = 14.sp)
+                    }
+                    OutlinedTextField(
+                        cash, { cash = it }, Modifier.fillMaxWidth(),
+                        enabled = editing,
+                        label = { Text("收款金额") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                    )
+                    if (pendingTrade.isNotBlank() && !paying) {
+                        Text("支付结果尚未确认，请继续查询该笔交易。")
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { couponKind = "" }) { Text("关闭") } },
+            confirmButton = {
+                TextButton(enabled = !paying, onClick = {
+                    val tradeToCheck = pendingTrade
+                    val amount = cash.trim().toBigDecimalOrNull()
+                    val code = authCode.trim()
+                    if (tradeToCheck.isBlank()) {
+                        if (amount == null || amount.signum() <= 0 || amount.scale() !in 0..2 || amount.precision() > 12) {
+                            repository.toast("请输入有效的收款金额")
+                            return@TextButton
+                        }
+                        if (isScan) {
+                            val remaining = current.payPrice.toBigDecimalOrNull()
+                            if (remaining == null || amount > remaining) {
+                                repository.toast("扫码收款金额不能超过还需收款金额")
+                                return@TextButton
+                            }
+                            if (!validPaymentBarcode(code)) {
+                                repository.toast("请扫描或输入有效的付款码")
+                                return@TextButton
+                            }
+                        }
+                    }
+                    paying = true
+                    authCode = ""
+                    scope.launch {
+                        try {
+                            if (!isScan) {
+                                val lockedAmount = checkNotNull(amount).toPlainString()
+                                if (repository.addCashSettle(orderId, method.settleType, lockedAmount, "13").orToast(repository) != null) {
+                                    selected = null
+                                    repository.toast("已记入现金")
+                                    load()
+                                }
+                                return@launch
+                            }
+                            if (tradeToCheck.isBlank()) {
+                                val lockedAmount = checkNotNull(amount).toPlainString()
+                                val result = repository.scanPay(orderId, lockedAmount, code).orToast(repository) ?: return@launch
+                                if (result.outTradeNo.isBlank()) {
+                                    selected = null
+                                    repository.toast(result.message.ifBlank { "服务器未返回交易单号，请先核对订单" })
+                                    load()
+                                    return@launch
+                                }
+                                pendingTrade = result.outTradeNo
+                            }
+                            val trade = pendingTrade
+                            repeat(40) {
+                                if (repository.scanPayQuery(trade).getOrNull()?.paid == true) {
+                                    pendingTrade = ""
+                                    selected = null
+                                    repository.toast("支付成功")
+                                    load()
+                                    return@launch
+                                }
+                                delay(3000)
+                            }
+                            repository.toast("支付结果未确认，可继续查询这笔交易")
+                        } finally {
+                            paying = false
+                        }
+                    }
+                }) {
+                    Text(
+                        when {
+                            paying -> if (isScan) "正在查询支付结果" else "正在记录现金"
+                            pendingTrade.isNotBlank() -> "继续查询支付"
+                            isScan -> "确认收款"
+                            else -> "确定"
+                        },
+                        color = Color(0xFF4A87D9),
+                        fontSize = 17.sp,
+                    )
+                }
+            },
+            dismissButton = {
+                if (!isScan) {
+                    TextButton(enabled = editing, onClick = { selected = null }) {
+                        Text("取消", color = Color(0xFF4A87D9), fontSize = 17.sp)
+                    }
+                }
+            },
         )
     }
+    if (editingRemark) {
+        AlertDialog(
+            onDismissRequest = { editingRemark = false },
+            title = { Text("结算备注") },
+            text = {
+                OutlinedTextField(
+                    remarkDraft, { remarkDraft = it }, Modifier.fillMaxWidth(),
+                    label = { Text("备注") },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    remark = remarkDraft
+                    editingRemark = false
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { editingRemark = false }) { Text("取消") } },
+        )
+    }
+    if (showQuota) {
+        AlertDialog(
+            onDismissRequest = { if (!submittingQuota) showQuota = false },
+            title = { Text("手工定额") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        quota, { quota = it }, Modifier.fillMaxWidth(),
+                        label = { Text("手工定额金额") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        enabled = !submittingQuota,
+                    )
+                    OutlinedTextField(
+                        quotaRemark, { quotaRemark = it }, Modifier.fillMaxWidth(),
+                        label = { Text("定额备注") },
+                        enabled = !submittingQuota,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !submittingQuota,
+                    onClick = {
+                        submittingQuota = true
+                        scope.launch {
+                            try {
+                                repository.addCashSettle(orderId, "1", quota, "1").orToast(repository)?.let {
+                                    repository.toast("已记入手工定额")
+                                    showQuota = false
+                                    load()
+                                }
+                            } finally {
+                                submittingQuota = false
+                            }
+                        }
+                    },
+                ) { Text(if (submittingQuota) "提交中" else "确定") }
+            },
+            dismissButton = { TextButton(onClick = { showQuota = false }, enabled = !submittingQuota) { Text("取消") } },
+        )
+    }
+}
+
+private const val PDA_BARCODE_ACTION = "android.rfid.INPUT"
+
+private fun validPaymentBarcode(code: String): Boolean = code.length in 18..32 && code.all { it in '0'..'9' }
+
+@Composable
+private fun ReceivePaymentBarcode(onBarcode: (String) -> Unit) {
+    val context = LocalContext.current
+    val receiverCallback by rememberUpdatedState(onBarcode)
+    LifecycleResumeEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != PDA_BARCODE_ACTION) return
+                val code = runCatching { intent.getStringExtra("data")?.trim() }.getOrNull() ?: return
+                if (validPaymentBarcode(code)) receiverCallback(code)
+            }
+        }
+        val registered = runCatching {
+            ContextCompat.registerReceiver(
+                context, receiver, IntentFilter(PDA_BARCODE_ACTION), ContextCompat.RECEIVER_EXPORTED,
+            )
+        }.isSuccess
+        onPauseOrDispose {
+            if (registered) context.unregisterReceiver(receiver)
+        }
+    }
+}
+
+@Composable
+private fun ConsumptionDetailsDialog(orderId: String, payments: List<PaymentLine>, onDismiss: () -> Unit) {
+    val repository = cashierViewModel().repository
+    val scope = rememberCoroutineScope()
+    var groups by remember { mutableStateOf<List<ConsumptionGroup>>(emptyList()) }
+    var attempt by remember { mutableIntStateOf(0) }
+    var loading by remember { mutableStateOf(true) }
+    var failed by remember { mutableStateOf(false) }
+    var printing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(orderId, payments, attempt) {
+        loading = true
+        val result = repository.consumptionDetails(orderId, payments)
+        groups = result.orToast(repository).orEmpty()
+        failed = result.isFailure
+        loading = false
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!printing) onDismiss() },
+        title = { Text("消费明细") },
+        text = {
+            when {
+                loading -> Text("正在读取消费明细")
+                failed -> TextButton(onClick = { attempt++ }) { Text("读取失败，重试") }
+                groups.isEmpty() -> Text("暂无消费明细")
+                else -> LazyColumn(
+                    Modifier.fillMaxWidth().heightIn(max = 440.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(groups) { group ->
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            val name = group.name.ifBlank { "商品" }
+                            Text(if (group.isCoupon) "$name · 优惠券" else name, fontWeight = FontWeight.Bold)
+                            ConsumptionAmounts(group.qty, group.total, group.payable)
+                            if (group.tip.isNotBlank()) Text(group.tip)
+                            group.products.forEach { product ->
+                                Text(
+                                    when {
+                                        product.isGift -> "${product.name} · 赠品"
+                                        product.isPromotion -> "${product.name} · 促销"
+                                        else -> product.name
+                                    },
+                                )
+                                ConsumptionAmounts(product.qty, product.total, product.payable)
+                                if (product.refundQty.isNotBlank() && product.refundMoney.isNotBlank()) {
+                                    Text("已退 ${product.refundQty} 件 · ${money(product.refundMoney)}")
+                                }
+                            }
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !loading && !failed && !printing,
+                onClick = {
+                    printing = true
+                    scope.launch {
+                        try {
+                            repository.printPreview(orderId, payments).orToast(repository)
+                                ?.let { repository.toast("预结单已发送") }
+                        } finally {
+                            printing = false
+                        }
+                    }
+                },
+            ) { Text(if (printing) "发送中" else "打印预结单") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !printing) { Text("关闭") } },
+    )
+}
+
+@Composable
+private fun ConsumptionAmounts(qty: String, total: String, payable: String) {
+    val amounts = listOfNotNull(
+        qty.takeIf { it.isNotBlank() }?.let { "×$it" },
+        total.takeIf { it.isNotBlank() }?.let { "原价 ${money(it)}" },
+        payable.takeIf { it.isNotBlank() }?.let { "应收 ${money(it)}" },
+    )
+    if (amounts.isNotEmpty()) Text(amounts.joinToString("  "), style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable
@@ -699,21 +1255,36 @@ fun OrderListScreen(onOpen: (OrderSummary) -> Unit) {
     val vm = cashierViewModel()
     val scope = rememberCoroutineScope()
     var keyword by remember { mutableStateOf("") }
+    var appliedKeyword by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var orders by remember { mutableStateOf<List<OrderSummary>>(emptyList()) }
     var page by remember { mutableIntStateOf(1) }
     var more by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var request by remember { mutableStateOf<Job?>(null) }
     val tabs = listOf("" to "全部", "0" to "未完成", "1" to "已完成")
 
     fun load(reset: Boolean = true) {
-        scope.launch {
-            val next = if (reset) 1 else page + 1
-            val rows = vm.repository.orders(status, keyword.trim(), next.toString()).orToast(vm.repository).orEmpty()
-            val known = if (reset) emptySet() else orders.map { it.orderId }.toSet()
-            val fresh = rows.filter { it.orderId !in known }
-            orders = if (reset) rows.distinctBy { it.orderId } else (orders + fresh).distinctBy { it.orderId }
-            page = next
-            more = fresh.size >= 10
+        if (!reset && loading) return
+        request?.cancel()
+        if (reset) {
+            appliedKeyword = keyword.trim()
+            orders = emptyList()
+            more = false
+        }
+        val query = appliedKeyword
+        val filter = status
+        val next = if (reset) 1 else page + 1
+        loading = true
+        request = scope.launch {
+            try {
+                val rows = vm.repository.orders(filter, query, next.toString()).orToast(vm.repository) ?: return@launch
+                orders = (orders + rows).distinctBy { it.orderId }
+                page = next
+                more = rows.size >= 10
+            } finally {
+                if (kotlin.coroutines.coroutineContext[Job]?.isCancelled != true) loading = false
+            }
         }
     }
 
@@ -726,6 +1297,8 @@ fun OrderListScreen(onOpen: (OrderSummary) -> Unit) {
             Modifier.fillMaxWidth().padding(12.dp),
             label = { Text("订单号 / 桌号") },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { load() }),
             trailingIcon = { TextButton(onClick = { load() }) { Text("搜索") } },
         )
         Row(
@@ -741,18 +1314,32 @@ fun OrderListScreen(onOpen: (OrderSummary) -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             itemsIndexed(orders, key = { index, order -> "${order.orderId}#$index" }) { _, order ->
-                Card(onClick = { onOpen(order) }) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text("${order.areaName} ${order.tableNo}", fontWeight = FontWeight.Bold)
-                        Text(order.orderNo.ifBlank { order.orderId })
-                        Text("${order.payStatusName}    ${money(order.income)}")
-                        Text(order.createTime, style = MaterialTheme.typography.bodySmall)
+                Card(
+                    onClick = { onOpen(order) },
+                    enabled = order.orderStatus != "20" && order.orderId.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(order.orderNo.ifBlank { order.orderId }, fontWeight = FontWeight.Bold)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${order.areaName} ${order.tableNo}".trim())
+                            Text(order.payStatusName, color = if (order.payStatus == "10") MaterialTheme.colorScheme.error else CashierTextMuted)
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(order.createTime, style = MaterialTheme.typography.bodySmall)
+                            Text(money(order.income), fontWeight = FontWeight.Medium)
+                        }
                     }
                 }
             }
+            if (orders.isEmpty()) {
+                item { Text(if (loading) "正在读取订单" else "暂无订单", Modifier.padding(12.dp)) }
+            }
             if (more) {
                 item {
-                    TextButton(onClick = { load(reset = false) }, modifier = Modifier.fillMaxWidth()) { Text("加载更多") }
+                    TextButton(onClick = { load(reset = false) }, enabled = !loading, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (loading) "加载中" else "加载更多")
+                    }
                 }
             }
         }
@@ -839,40 +1426,142 @@ private fun maskMobile(mobile: String): String =
     if (mobile.length >= 7) mobile.replaceRange(3, 7, "****") else mobile
 
 @Composable
-fun SwitchTableScreen(orderId: String, merge: Boolean, onBack: () -> Unit) {
-    val vm = cashierViewModel()
+fun SwitchTableScreen(orderId: String, sourceTableId: String, merge: Boolean, onBack: () -> Unit) {
+    val repository = cashierViewModel().repository
     val scope = rememberCoroutineScope()
+    var source by remember { mutableStateOf<TableOrder?>(null) }
+    var sourceLoaded by remember { mutableStateOf(false) }
+    var entered by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var quantities by remember { mutableStateOf<Map<String, String>?>(null) }
+    var transferAll by remember { mutableStateOf(false) }
     var search by remember { mutableStateOf("") }
     var tables by remember { mutableStateOf<List<DiningTable>>(emptyList()) }
+    var loadingTables by remember { mutableStateOf(false) }
+    var target by remember { mutableStateOf<DiningTable?>(null) }
+    var submitting by remember { mutableStateOf(false) }
+    val choosingTable = !merge || quantities != null
 
-    fun load() {
+    fun loadTables() {
+        if (loadingTables) return
+        loadingTables = true
         scope.launch {
-            tables = vm.repository.tables("", "", if (merge) "" else "10", search.trim()).orToast(vm.repository).orEmpty()
+            try {
+                tables = repository.tables("", "", if (merge) "" else "10", search.trim())
+                    .orToast(repository).orEmpty().filter { it.id.isNotBlank() && it.id != sourceTableId }
+            } finally {
+                loadingTables = false
+            }
         }
     }
 
-    LaunchedEffect(Unit) { load() }
+    fun goBack() {
+        if (submitting) return
+        if (merge && choosingTable) quantities = null else onBack()
+    }
 
-    Scaffold(topBar = { CashierTopBar(if (merge) "并台" else "换台", onBack = onBack) }) { padding ->
+    BackHandler(enabled = submitting || (merge && choosingTable)) { goBack() }
+    LaunchedEffect(sourceTableId, orderId, merge) {
+        if (merge) {
+            source = repository.orderOnTable(sourceTableId).orToast(repository)?.takeIf { it.orderId == orderId }
+            sourceLoaded = true
+        }
+    }
+    LaunchedEffect(choosingTable) {
+        if (choosingTable) loadTables()
+    }
+
+    val selectedSource = source
+    val transferable = selectedSource?.lines.orEmpty().filter {
+        it.orderProductId.isNotBlank() && it.qty.toBigDecimalOrNull()?.signum() == 1
+    }
+    val title = when {
+        !merge -> "换台"
+        choosingTable -> "选择目标桌台"
+        else -> "单品转台"
+    }
+    Scaffold(topBar = { CashierTopBar(title, onBack = ::goBack) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
+            if (!choosingTable) {
+                TextButton(
+                    onClick = { entered = transferable.associate { it.orderProductId to it.qty } },
+                    enabled = transferable.isNotEmpty(),
+                ) { Text("全选") }
+                LazyColumn(
+                    Modifier.weight(1f),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (transferable.isEmpty()) {
+                        item { Text(if (sourceLoaded) "当前订单没有可转台的商品" else "正在读取订单") }
+                    }
+                    itemsIndexed(transferable) { _, line ->
+                        val id = line.orderProductId
+                        val input = entered[id].orEmpty()
+                        val amount = input.trim().toBigDecimalOrNull()
+                        val invalid = input.isNotBlank() && (amount == null || amount.signum() < 0 ||
+                            amount > line.qty.toBigDecimal())
+                        OutlinedTextField(
+                            input,
+                            { value ->
+                                if (value.length <= 16 && value.all { it in '0'..'9' || it == '.' }) {
+                                    entered = entered + (id to value)
+                                }
+                            },
+                            Modifier.fillMaxWidth(),
+                            label = { Text("${line.name}（可转 ${line.qty}）") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            isError = invalid,
+                            singleLine = true,
+                        )
+                    }
+                }
+                Button(
+                    enabled = transferable.isNotEmpty(),
+                    onClick = {
+                        val selected = mutableMapOf<String, String>()
+                        for (line in transferable) {
+                            val raw = entered[line.orderProductId].orEmpty().trim()
+                            if (raw.isBlank()) continue
+                            val amount = raw.toBigDecimalOrNull()
+                            if (amount == null || amount.signum() < 0 || amount > line.qty.toBigDecimal()) {
+                                repository.toast("请输入正确的转台数量")
+                                return@Button
+                            }
+                            if (amount.signum() > 0) selected[line.orderProductId] = amount.stripTrailingZeros().toPlainString()
+                        }
+                        if (selected.isEmpty()) {
+                            repository.toast("请选择要转台的商品和数量")
+                            return@Button
+                        }
+                        val all = selectedSource != null && selectedSource.lines.all { line ->
+                            val qty = line.qty.toBigDecimalOrNull()
+                            qty != null && (qty.signum() == 0 ||
+                                selected[line.orderProductId]?.toBigDecimalOrNull()?.compareTo(qty) == 0)
+                        }
+                        if (all && selectedSource.hasPaymentRecord) {
+                            repository.toast("该订单已支付部分金额，不可全部转台")
+                            return@Button
+                        }
+                        transferAll = all
+                        quantities = selected
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                ) { Text("下一步") }
+                return@Column
+            }
             OutlinedTextField(
                 search,
                 { search = it },
                 Modifier.fillMaxWidth().padding(12.dp),
-                label = { Text("搜索空闲桌") },
-                trailingIcon = { TextButton(onClick = { load() }) { Text("搜索") } },
+                label = { Text(if (merge) "搜索桌号" else "搜索空闲桌") },
+                trailingIcon = { TextButton(onClick = ::loadTables, enabled = !loadingTables) { Text("搜索") } },
             )
             LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (loadingTables || tables.isEmpty()) {
+                    item { Text(if (loadingTables) "正在读取桌台" else "没有可选桌台") }
+                }
                 itemsIndexed(tables, key = { index, table -> "${table.id}#$index" }) { _, table ->
-                    Card(onClick = {
-                        scope.launch {
-                            val result = if (merge) vm.repository.mergeTable(orderId, table.id) else vm.repository.switchTable(table.id, orderId)
-                            result.orToast(vm.repository)?.let {
-                                vm.repository.toast(if (merge) "并台成功" else "换台成功")
-                                onBack()
-                            }
-                        }
-                    }) {
+                    Card(onClick = { target = table }, enabled = !loadingTables && !submitting) {
                         Column(Modifier.padding(12.dp)) {
                             Text("${table.areaName} ${table.no}", fontWeight = FontWeight.Bold)
                             Text(table.statusName)
@@ -881,6 +1570,40 @@ fun SwitchTableScreen(orderId: String, merge: Boolean, onBack: () -> Unit) {
                 }
             }
         }
+    }
+    target?.let { table ->
+        AlertDialog(
+            onDismissRequest = { if (!submitting) target = null },
+            title = { Text(if (merge) "确认转台" else "确认换台") },
+            text = { Text("目标桌台：${table.areaName} ${table.no}") },
+            confirmButton = {
+                TextButton(
+                    enabled = !submitting,
+                    onClick = {
+                        val selection = quantities
+                        if (merge && selection.isNullOrEmpty()) return@TextButton
+                        submitting = true
+                        scope.launch {
+                            try {
+                                val result = when {
+                                    selection == null -> repository.switchTable(table.id, orderId)
+                                    transferAll -> repository.mergeTable(orderId, table.id)
+                                    else -> repository.transferProducts(orderId, table.id, selection)
+                                }
+                                if (result.orToast(repository) != null) {
+                                    repository.toast(if (merge) "转台成功" else "换台成功")
+                                    onBack()
+                                }
+                            } finally {
+                                submitting = false
+                                target = null
+                            }
+                        }
+                    },
+                ) { Text(if (submitting) "处理中" else "确认") }
+            },
+            dismissButton = { TextButton(onClick = { target = null }, enabled = !submitting) { Text("取消") } },
+        )
     }
 }
 

@@ -39,6 +39,7 @@ class CashierRepository(context: Context) {
             userId = prefs[USER_ID].orEmpty(),
             appId = prefs[APP_ID].orEmpty().ifBlank { "10001" },
             mobile = prefs[MOBILE].orEmpty(),
+            userCode = prefs[USER_CODE].orEmpty(),
         )
     }
 
@@ -66,7 +67,7 @@ class CashierRepository(context: Context) {
 
     suspend fun logout() {
         dataStore.edit { prefs ->
-            listOf(TOKEN, USER_NAME, DISPLAY_NAME, CASHIER_ID, SUPPLIER_ID, USER_ID, APP_ID, MOBILE)
+            listOf(TOKEN, USER_NAME, DISPLAY_NAME, CASHIER_ID, SUPPLIER_ID, USER_ID, APP_ID, MOBILE, USER_CODE)
                 .forEach { prefs.remove(it) }
         }
         _session.value = null
@@ -132,14 +133,26 @@ class CashierRepository(context: Context) {
 
     suspend fun orderOnTable(tableId: String): Result<TableOrder> = call { api.orderOnTable(tableId) }
 
+    suspend fun clearPlatesClosesOrder(tableId: String): Result<Boolean> = call { api.clearPlatesClosesOrder(tableId) }
+
+    suspend fun clearPlates(tableId: String): Result<Unit> = call { api.clearPlates(tableId) }
+
     suspend fun orderInfo(orderId: String, supplierId: String, userId: String): Result<SettleOrder> = call {
         val session = _session.value
         api.orderInfo(
             orderId,
             supplierId.ifBlank { session?.shopSupplierId.orEmpty() },
-            userId.ifBlank { currentUserId() },
+            userId,
         )
     }
+
+    suspend fun otherSettlementCashier(orderId: String): Result<String?> = call { api.otherSettlementCashier(orderId) }
+
+    suspend fun isLowAverageSpend(orderId: String): Result<Boolean> = call { api.isLowAverageSpend(orderId) }
+
+    suspend fun lockSettlement(orderId: String): Result<Unit> = call { api.lockSettlement(orderId) }
+
+    suspend fun unlockSettlement(orderId: String): Result<Unit> = call { api.unlockSettlement(orderId) }
 
     suspend fun paymentMethods(tableId: String): Result<List<PayMethod>> = call { api.paymentMethods(tableId) }
 
@@ -180,14 +193,20 @@ class CashierRepository(context: Context) {
     suspend fun mergeTable(orderId: String, tableId: String): Result<Unit> =
         call { api.mergeTable(orderId, tableId) }
 
-    suspend fun memberCoupons(tableId: String, orderId: String, supplierId: String): Result<List<MemberAccount>> =
-        call { api.memberCoupons(tableId, orderId, supplierId) }
+    suspend fun transferProducts(orderId: String, targetTableId: String, quantities: Map<String, String>): Result<Unit> =
+        call { api.transferProducts(orderId, targetTableId, quantities) }
 
-    suspend fun packCoupons(tableId: String, orderId: String, supplierId: String): Result<List<MemberAccount>> =
-        call { api.packCoupons(tableId, orderId, supplierId) }
+    suspend fun memberCoupons(tableId: String, orderId: String, supplierId: String, mobile: String = ""): Result<List<MemberAccount>> =
+        call { api.memberCoupons(tableId, orderId, supplierId, mobile) }
+
+    suspend fun packCoupons(tableId: String, orderId: String, supplierId: String, mobile: String = ""): Result<List<MemberAccount>> =
+        call { api.packCoupons(tableId, orderId, supplierId, mobile) }
 
     suspend fun applyCoupon(orderId: String, settleValue: String, coupon: MemberCoupon): Result<Unit> =
-        call { api.applyCoupons(orderId, settleValue, listOf(coupon.raw)) }
+        applyCoupons(orderId, settleValue, listOf(coupon.raw))
+
+    suspend fun applyCoupons(orderId: String, settleValue: String, coupons: List<JsonObject>): Result<Unit> =
+        call { api.applyCoupons(orderId, settleValue, coupons) }
 
     suspend fun lookupCoupon(meituan: Boolean, code: String, orderId: String): Result<JsonObject> =
         call { api.lookupCoupon(meituan, code, orderId) }
@@ -226,6 +245,9 @@ class CashierRepository(context: Context) {
 
     suspend fun printPreview(orderId: String, payments: List<PaymentLine>): Result<Unit> =
         call { api.printPreview(orderId, payments) }
+
+    suspend fun consumptionDetails(orderId: String, payments: List<PaymentLine>): Result<List<ConsumptionGroup>> =
+        call { api.consumptionDetails(orderId, payments) }
 
     suspend fun cashierVersion(): Result<AppRelease> = call { api.cashierVersion() }
 
@@ -267,6 +289,7 @@ class CashierRepository(context: Context) {
             prefs[USER_ID] = session.userId
             prefs[APP_ID] = session.appId
             prefs[MOBILE] = session.mobile
+            prefs[USER_CODE] = session.userCode
         }
         _session.value = session
     }
@@ -284,5 +307,6 @@ class CashierRepository(context: Context) {
         private val USER_ID = stringPreferencesKey("cashier_user_id")
         private val APP_ID = stringPreferencesKey("cashier_app_id")
         private val MOBILE = stringPreferencesKey("cashier_mobile")
+        private val USER_CODE = stringPreferencesKey("cashier_user_code")
     }
 }

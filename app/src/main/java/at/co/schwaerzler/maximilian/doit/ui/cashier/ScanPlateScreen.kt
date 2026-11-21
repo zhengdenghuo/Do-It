@@ -2,6 +2,7 @@ package at.co.schwaerzler.maximilian.doit.ui.cashier
 
 import android.media.AudioManager
 import android.media.ToneGenerator
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,31 +12,39 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import at.co.schwaerzler.maximilian.doit.pos.DeviceCode
 import at.co.schwaerzler.maximilian.doit.pos.ScanLine
 import at.co.schwaerzler.maximilian.doit.pos.UhfScanReader
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.math.BigDecimal
 import kotlin.coroutines.cancellation.CancellationException
@@ -47,105 +56,142 @@ fun ScanPlateScreen(
     onBack: () -> Unit,
     onDone: () -> Unit,
 ) {
-    val vm = cashierViewModel()
+    val repository = cashierViewModel().repository
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
+    val context = LocalContext.current.applicationContext
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     var status by remember { mutableStateOf("扫码头准备中") }
     var ready by remember { mutableStateOf(false) }
-    var codes by remember { mutableStateOf<List<DeviceCode>>(emptyList()) }
-    var codesReady by remember { mutableStateOf(false) }
-    val seenHolder = remember { mutableStateOf<List<String>>(emptyList()) }
-    val linesHolder = remember { mutableStateOf<List<ScanLine>>(emptyList()) }
+    var sessionOpen by remember { mutableStateOf(false) }
+    var sessionFailed by remember { mutableStateOf(false) }
+    var codes by remember { mutableStateOf<List<DeviceCode>?>(null) }
+    var codesFailed by remember { mutableStateOf(false) }
+    var sessionAttempt by remember { mutableIntStateOf(0) }
+    var codeAttempt by remember { mutableIntStateOf(0) }
+    var readerAttempt by remember { mutableIntStateOf(0) }
+    var seen by remember { mutableStateOf<Set<String>>(emptySet()) }
     var submitting by remember { mutableStateOf(false) }
-    var lastConfirm by remember { mutableStateOf(0L) }
-    val seen = seenHolder.value
-    val plate = matchPlates(codes, seen, tableId)
-    SideEffect { linesHolder.value = plate }
+    var submitted by remember { mutableStateOf(false) }
+    var acknowledgedUnmatched by remember { mutableStateOf(false) }
+    val networkWrites = remember { Mutex() }
+    val result = remember(codes, seen, tableId) { matchPlates(codes.orEmpty(), seen, tableId) }
+    val latestLines by rememberUpdatedState(result.lines)
+    val knownRules = !codes.isNullOrEmpty()
+    val showUnmatched = knownRules && result.unmatched > 0 && !acknowledgedUnmatched && !submitting
 
-    LaunchedEffect(tableId) {
-        vm.repository.openScan(tableId).orToast(vm.repository)
-        codes = vm.repository.deviceCodes(tableId).orToast(vm.repository).orEmpty()
-        codesReady = true
-    }
+    BackHandler(enabled = submitting) {}
 
-    DisposableEffect(tableId) {
-        val reader = UhfScanReader(context)
-        val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 80)
-        val job: Job = scope.launch(Dispatchers.IO) {
-            val opened = reader.open()
-            withContext(Dispatchers.Main) {
-                ready = opened
-                status = reader.status
-            }
-            if (!opened) return@launch
-            while (isActive) {
-                val tags = try {
-                    reader.inventory()
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    delay(200)
-                    emptyList()
+    LaunchedEffect(tableId, sessionAttempt) {
+        scanSessionAccess.withLock {
+            var opened = false
+            sessionFailed = false
+            try {
+                withContext(NonCancellable) {
+                    opened = repository.openScan(tableId).orToast(repository) != null
                 }
-                if (tags.isNotEmpty()) {
-                    withContext(Dispatchers.Main) {
-                        val known = seenHolder.value
-                        val fresh = tags.filter { it !in known }
-                        if (fresh.isNotEmpty()) {
-                            seenHolder.value = known + fresh
-                            tone.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
-                        }
+                sessionOpen = opened
+                sessionFailed = !opened
+                if (opened) awaitCancellation()
+            } finally {
+                if (opened) {
+                    withContext(NonCancellable) {
+                        networkWrites.withLock { repository.closeScan(tableId).orToast(repository) }
                     }
                 }
             }
         }
-        val upload = scope.launch(Dispatchers.IO) {
+    }
+
+    LaunchedEffect(tableId, sessionOpen, codeAttempt) {
+        if (!sessionOpen) return@LaunchedEffect
+        codesFailed = false
+        codes = repository.deviceCodes(tableId).orToast(repository)
+        codesFailed = codes == null
+    }
+
+    LaunchedEffect(lifecycle, sessionOpen, readerAttempt) {
+        if (!sessionOpen) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            scanReaderAccess.withLock {
+                val reader = UhfScanReader(context)
+                val tone = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 80) }.getOrNull()
+                try {
+                    status = "正在连接扫码头"
+                    ready = withContext(Dispatchers.IO) { reader.open() }
+                    status = reader.status
+                    if (!ready) return@withLock
+                    while (isActive) {
+                        val tags = try {
+                            withContext(Dispatchers.IO) { reader.inventory() }
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            status = "扫码头读取失败，请刷新连接"
+                            break
+                        }
+                        val fresh = tags.map { it.uppercase() }.filterNot { it in seen }
+                        if (fresh.isNotEmpty()) {
+                            seen = seen + fresh
+                            tone?.startTone(ToneGenerator.TONE_PROP_BEEP, 80)
+                        }
+                        delay(20)
+                    }
+                } finally {
+                    ready = false
+                    tone?.release()
+                    withContext(NonCancellable + Dispatchers.IO) { reader.close() }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(lifecycle, tableId, sessionOpen, knownRules) {
+        if (!sessionOpen || !knownRules) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (isActive) {
-                val lines = linesHolder.value
-                if (lines.isNotEmpty()) {
-                    vm.repository.saveScanLines(tableId, lines)
+                networkWrites.withLock {
+                    if (ready && !submitting && !submitted) {
+                        repository.saveScanLines(tableId, latestLines)
+                    }
                 }
                 delay(1000)
             }
         }
-        onDispose {
-            job.cancel()
-            upload.cancel()
-            tone.release()
-            Thread {
-                reader.close()
-                kotlinx.coroutines.runBlocking(Dispatchers.IO) {
-                    vm.repository.closeScan(tableId)
-                }
-            }.start()
-        }
     }
 
+    val visible = result.lines.filter { it.qty > 0 }
     Scaffold(
-        topBar = { CashierTopBar(tableNo.ifBlank { "扫盘" }, onBack = onBack) },
+        topBar = {
+            CashierTopBar(tableNo.ifBlank { "扫盘" }, onBack = { if (!submitting) onBack() }) {
+                TextButton(enabled = !submitting && (sessionOpen || sessionFailed), onClick = {
+                    if (sessionFailed) sessionAttempt++
+                    if (codesFailed) codeAttempt++
+                    readerAttempt++
+                }) { Text("刷新") }
+            }
+        },
         bottomBar = {
             Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("合计 ${money(plate.sumText())}", fontWeight = FontWeight.Bold)
+                Text("已扫 ${visible.sumOf { it.qty }} 盘 · 合计 ${money(visible.sumText())}", fontWeight = FontWeight.Bold)
                 Button(
                     onClick = {
-                        val now = System.currentTimeMillis()
-                        if (submitting || now - lastConfirm < 1000) return@Button
-                        val picked = plate.filter { it.qty > 0 }
-                        if (picked.isEmpty()) {
-                            vm.repository.toast("还没有扫到盘子")
-                            return@Button
-                        }
-                        lastConfirm = now
+                        if (submitting || submitted || visible.isEmpty()) return@Button
                         submitting = true
                         scope.launch {
-                            vm.repository.addDeviceOrder(picked).orToast(vm.repository)?.let {
-                                vm.repository.toast("扫盘成功")
-                                onDone()
+                            try {
+                                networkWrites.withLock {
+                                    if (repository.addDeviceOrder(visible).orToast(repository) != null) {
+                                        submitted = true
+                                        repository.toast("扫盘成功")
+                                        onDone()
+                                    }
+                                }
+                            } finally {
+                                submitting = false
                             }
-                            submitting = false
                         }
                     },
-                    enabled = ready && !submitting,
+                    enabled = sessionOpen && knownRules && !submitting && !submitted && visible.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text(if (submitting) "提交中" else "确认扫盘") }
             }
@@ -156,16 +202,19 @@ fun ScanPlateScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item { Text(status) }
-            val visible = plate.filter { it.qty > 0 }
-            if (!codesReady) {
-                item { Text("正在读取盘子规则") }
-            } else if (codes.isEmpty()) {
-                item { Text("这桌没有配置盘子") }
-            } else if (visible.isEmpty()) {
-                item { Text("请把盘子放到扫码头上") }
+            item {
+                Text(when {
+                    sessionFailed -> "未能开启扫盘，请刷新"
+                    !sessionOpen -> "正在开启扫盘"
+                    codesFailed -> "无法读取盘子规则，请刷新"
+                    codes == null -> "正在读取盘子规则"
+                    !knownRules -> "这桌没有配置盘子"
+                    else -> status
+                })
             }
-            items(visible, key = { it.productId + it.deviceNos.joinToString() }) { line ->
+            if (knownRules && ready && visible.isEmpty()) item { Text("请把盘子放到扫码头上") }
+            if (knownRules && result.unmatched > 0) item { Text("有 ${result.unmatched} 个未入库盘子") }
+            items(visible, key = { it.productId }) { line ->
                 Card {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("${line.name}", fontWeight = FontWeight.Medium)
@@ -179,14 +228,28 @@ fun ScanPlateScreen(
             }
         }
     }
+    if (showUnmatched) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("发现未入库盘子") },
+            text = { Text("有 ${result.unmatched} 个盘子未入库，请上报并保留这些盘子，结账后核查。") },
+            confirmButton = { TextButton(onClick = { acknowledgedUnmatched = true }) { Text("确定") } },
+        )
+    }
 }
 
-private fun matchPlates(codes: List<DeviceCode>, epcs: List<String>, tableId: String): List<ScanLine> {
+private val scanReaderAccess = Mutex()
+private val scanSessionAccess = Mutex()
+
+private data class PlateMatch(val lines: List<ScanLine>, val unmatched: Int)
+
+private fun matchPlates(codes: List<DeviceCode>, epcs: Set<String>, tableId: String): PlateMatch {
+    val byRule = epcs.filter { it.length > 8 }.groupBy { it.substring(4, 8) }
+    val rules = codes.map { it.ruleNo.uppercase() }.toSet()
+    val unmatched = epcs.count { it.length <= 8 || it.substring(4, 8) !in rules }
     val raw = mutableListOf<ScanLine>()
     codes.forEach { code ->
-        val hits = epcs.filter { epc ->
-            epc.length > 8 && epc.substring(4, 8).equals(code.ruleNo, ignoreCase = true)
-        }
+        val hits = byRule[code.ruleNo.uppercase()].orEmpty()
         if (hits.isEmpty()) {
             raw += code.toLine(tableId, 0, emptyList())
         } else {
@@ -206,7 +269,7 @@ private fun matchPlates(codes: List<DeviceCode>, epcs: List<String>, tableId: St
             merged += item
         }
     }
-    return merged
+    return PlateMatch(merged, unmatched)
 }
 
 private fun DeviceCode.toLine(tableId: String, qty: Int, deviceNos: List<String>) = ScanLine(

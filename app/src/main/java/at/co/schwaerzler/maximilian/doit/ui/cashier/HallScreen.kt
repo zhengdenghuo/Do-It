@@ -56,9 +56,11 @@ import androidx.compose.ui.unit.sp
 import android.content.Intent
 import android.net.Uri
 import at.co.schwaerzler.maximilian.doit.pos.AppRelease
+import at.co.schwaerzler.maximilian.doit.pos.CashierApi
 import at.co.schwaerzler.maximilian.doit.pos.DiningTable
 import at.co.schwaerzler.maximilian.doit.pos.TableArea
 import at.co.schwaerzler.maximilian.doit.pos.TableStatusChip
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 @Composable
@@ -70,13 +72,15 @@ fun HallScreen(
     val vm = cashierViewModel()
     val scope = rememberCoroutineScope()
     var search by remember { mutableStateOf("") }
+    var appliedSearch by remember { mutableStateOf("") }
     var statuses by remember { mutableStateOf<List<TableStatusChip>>(emptyList()) }
     var areas by remember { mutableStateOf<List<TableArea>>(emptyList()) }
     var tables by remember { mutableStateOf<List<DiningTable>>(emptyList()) }
     var status by remember { mutableStateOf("") }
     var areaId by remember { mutableStateOf("") }
-    var openClass by remember { mutableStateOf("1") }
+    var openClass by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var reloadJob by remember { mutableStateOf<Job?>(null) }
     var tablePage by remember { mutableIntStateOf(1) }
     var tableMore by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf<DiningTable?>(null) }
@@ -86,41 +90,50 @@ fun HallScreen(
     val session by vm.session.collectAsState()
 
     fun reload(reset: Boolean = true) {
-        scope.launch {
-            loading = true
-            if (reset) {
-                openClass = vm.repository.shopOpenStatus().getOrDefault(openClass)
-                statuses = vm.repository.tableStatus().getOrElse { emptyList() }
-                if (status.isBlank()) status = statuses.firstOrNull()?.status.orEmpty()
-                areas = vm.repository.areas(status).getOrElse { emptyList() }.distinctBy { it.id }
-                if (areaId.isBlank()) areaId = areas.firstOrNull()?.id.orEmpty()
+        if (!reset && loading) return
+        reloadJob?.cancel()
+        loading = true
+        if (reset) {
+            appliedSearch = search.trim()
+            tables = emptyList()
+            tableMore = false
+        }
+        val query = appliedSearch
+        reloadJob = scope.launch {
+            try {
+                if (reset) {
+                    openClass = vm.repository.shopOpenStatus().getOrNull()?.ifBlank { null }
+                    statuses = vm.repository.tableStatus().getOrElse { statuses }
+                    if (status.isBlank()) status = statuses.firstOrNull()?.status.orEmpty()
+                    areas = vm.repository.areas(status).getOrElse { emptyList() }.distinctBy { it.id }
+                    if (areas.none { it.id == areaId }) areaId = areas.firstOrNull()?.id.orEmpty()
+                }
+                val next = if (reset) 1 else tablePage + 1
+                val rows = vm.repository.tables(areaId, "", status, query, next.toString())
+                    .orToast(vm.repository) ?: return@launch
+                val unique = rows.distinctBy { it.id }
+                val known = if (reset) emptySet() else tables.map { it.id }.toSet()
+                tables = if (reset) unique else tables + unique.filter { it.id !in known }
+                tablePage = next
+                tableMore = rows.size >= 30
+            } finally {
+                if (kotlin.coroutines.coroutineContext[Job]?.isCancelled != true) loading = false
             }
-            val next = if (reset) 1 else tablePage + 1
-            val rows = vm.repository.tables(areaId, "", status, search.trim(), next.toString())
-                .orToast(vm.repository)
-                .orEmpty()
-            val unique = rows.distinctBy { it.id }
-            val known = if (reset) emptySet() else tables.map { it.id }.toSet()
-            val fresh = unique.filter { it.id !in known }
-            tables = if (reset) unique else tables + fresh
-            tablePage = next
-            tableMore = fresh.size >= 30
-            loading = false
         }
     }
 
     LaunchedEffect(Unit) {
         reload()
         val remote = vm.repository.cashierVersion().getOrNull()
-        if (remote != null && remote.downloadUrl.isNotBlank() && newerVersion(remote.version, "1.0.3.9")) {
+        if (remote != null && remote.downloadUrl.isNotBlank() && newerVersion(remote.version, CashierApi.COMPATIBILITY_VERSION)) {
             release = remote
         }
     }
 
     Column(Modifier.fillMaxSize().background(Color(0xFFF3F5F8))) {
-        if (openClass != "1") {
+        if (openClass != "1" && !loading) {
             Text(
-                "门店暂未开班，不可下单",
+                if (openClass == null) "暂时无法确认门店开班状态" else "门店暂未开班，不可下单",
                 modifier = Modifier.fillMaxWidth().background(Color(0xFFFFF3E0)).padding(8.dp),
                 color = Color(0xFF8A4B08),
                 textAlign = TextAlign.Center,
@@ -253,7 +266,7 @@ fun HallScreen(
                                 openClass != "1" -> vm.repository.toast("门店暂未开班，不可下单")
                                 table.status == "40" || table.status == "50" -> vm.repository.toast("当前桌台不可操作")
                                 table.status == "10" -> pending = table
-                                table.status == "70" -> onOpenMenu(table.id, table.no)
+                                table.status == "70" -> onOpenMenu(table.id, "${table.areaName}${table.no}(${table.mealNum}/${table.maxNum})")
                                 else -> {
                                     val label = listOf(table.areaName, table.no).filter { it.isNotBlank() }.joinToString("")
                                     onOpenOrder(
@@ -388,7 +401,7 @@ private fun TableCard(table: DiningTable, onClick: () -> Unit, onLongClick: () -
                 Text("+", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             }
             Text(
-                "${table.maxNum.ifBlank { "0" }}人桌",
+                "${table.maxNum.ifBlank { "0" }}人桌${if (table.seating) " · 入座中" else ""}",
                 color = Color.White,
                 fontSize = 13.sp,
                 modifier = Modifier.padding(top = 6.dp),

@@ -1,6 +1,7 @@
 package at.co.schwaerzler.maximilian.doit.pos
 
 import android.os.Build
+import android.util.Log
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -24,7 +25,7 @@ class CashierApi(
             "password" to password,
             "deviceToken" to "",
             "systemCode" to "elementCollection",
-            "versionNo" to "1.0.3.9",
+            "versionNo" to COMPATIBILITY_VERSION,
             "softSort" to "collectpoint",
             "deviceModel" to Build.MODEL,
         ),
@@ -55,7 +56,7 @@ class CashierApi(
             "verifyCode" to verifyCode,
             "deviceModel" to Build.MODEL,
             "systemCode" to "elementCollection",
-            "versionNo" to "1.0.3.9",
+            "versionNo" to COMPATIBILITY_VERSION,
             "softSort" to "collectpoint",
         ),
     ).requireOk().asObject().toSession(phone)
@@ -257,13 +258,60 @@ class CashierApi(
         return detail.toTableOrder()
     }
 
+    fun clearPlatesClosesOrder(tableId: String): Boolean {
+        val data = post(
+            "index.php/cashier/order.hall_cart/isAllSweeingProduct",
+            json("table_id" to tableId),
+        ).requireOk().asObject()
+        return when (data.s("is_all_sweeing")) {
+            "1" -> true
+            "0" -> false
+            else -> error("无法确认清盘后是否会关闭订单")
+        }
+    }
+
+    fun clearPlates(tableId: String) {
+        post("index.php/cashier/order.HallCart/clearPlat", json("table_id" to tableId)).requireOk()
+    }
+
     fun orderInfo(orderId: String, supplierId: String, userId: String): SettleOrder {
         val data = post(
             "index.php/cashier/order.HallCart/getOrderInfo",
-            json("order_id" to orderId, "shop_supplier_id" to supplierId, "user_id" to userId),
+            buildJsonObject {
+                put("order_id", JsonPrimitive(orderId))
+                put("shop_supplier_id", JsonPrimitive(supplierId))
+                put("user_id", JsonPrimitive(userId))
+                put("coupon", JsonArray(emptyList()))
+                put("settle", JsonArray(emptyList()))
+            },
         ).requireOk()
         val box = data.obj("data").ifEmpty { data.asObject() }
+        if (box.s("order_id") != orderId) error("服务器未返回当前订单的结账明细")
         return box.toSettleOrder()
+    }
+
+    fun otherSettlementCashier(orderId: String): String? {
+        val state = post("cashier/store.Table/checkOrderLockOwner", json("order_id" to orderId))
+            .requireOk().asObject()
+        return if (state.s("is_locked") == "1" && state.s("is_self_lock") != "1") {
+            state.s("cashier_name").ifBlank { "另一位收银员" }
+        } else {
+            null
+        }
+    }
+
+    fun isLowAverageSpend(orderId: String): Boolean =
+        post(
+            "index.php/cashier/order.order/checkAvgPeopleLessThanSeventy",
+            json("order_id" to orderId),
+        ).requireOk().asObject().s("is_less_than_seventy") == "1"
+
+    fun lockSettlement(orderId: String) {
+        post("cashier/store.Table/orderLock", json("order_id" to orderId)).requireOk()
+    }
+
+    fun unlockSettlement(orderId: String) {
+        post("cashier/store.Table/orderUnlock", json("order_id" to orderId)).requireOk()
     }
 
     fun paymentMethods(tableId: String): List<PayMethod> {
@@ -275,6 +323,7 @@ class CashierApi(
                 type = it.s("type"),
                 settleType = it.s("settle_type"),
                 payMethodId = it.s("pay_method_id"),
+                description = it.s("desc"),
             )
         }
     }
@@ -316,12 +365,21 @@ class CashierApi(
     }
 
     fun scanPayQuery(outTradeNo: String): ScanPayResult {
-        val data = post(
+        val response = post(
             "index.php/cashier/order.Order/ScanPayQuery",
             json("out_trade_no" to outTradeNo),
-        ).requireOk().asObject()
+        )
+        val message = response.s("msg").ifBlank { response.s("message") }
+        if (message == "已支付") return ScanPayResult(status = "1", outTradeNo = outTradeNo, message = message)
+        val data = response.requireOk().asObject()
         val box = data.obj("data").ifEmpty { data }
-        return ScanPayResult(status = box.s("status"), outTradeNo = box.s("out_trade_no"), message = box.s("msg"))
+        val returnedTrade = box.s("out_trade_no").ifBlank { outTradeNo }
+        require(returnedTrade == outTradeNo) { "支付查询返回的交易单号不匹配" }
+        return ScanPayResult(
+            status = box.s("status"),
+            outTradeNo = returnedTrade,
+            message = box.s("msg").ifBlank { message },
+        )
     }
 
     fun finishPay(order: SettleOrder, remark: String, quotaRemark: String) {
@@ -357,6 +415,7 @@ class CashierApi(
                 income = it.s("order_real_income"),
                 payStatusName = it.s("pay_status_name"),
                 payStatus = it.s("pay_status"),
+                orderStatus = it.s("order_status"),
                 createTime = it.s("create_time"),
                 tableId = it.s("table_id"),
                 userId = it.s("user_id"),
@@ -445,11 +504,26 @@ class CashierApi(
         ).requireOk()
     }
 
-    fun memberCoupons(tableId: String, orderId: String, supplierId: String): List<MemberAccount> =
-        couponAccounts("index.php/cashier/order.HallCart/getCouponList", tableId, orderId, supplierId)
+    fun transferProducts(orderId: String, targetTableId: String, quantities: Map<String, String>) {
+        post(
+            "index.php/cashier/order.order/transferProduct",
+            buildJsonObject {
+                put("order_id", JsonPrimitive(orderId))
+                put("target_table_id", JsonPrimitive(targetTableId))
+                put("product_data", buildJsonArray {
+                    for ((id, quantity) in quantities) {
+                        add(json("order_product_id" to id, "num" to quantity))
+                    }
+                })
+            },
+        ).requireOk()
+    }
 
-    fun packCoupons(tableId: String, orderId: String, supplierId: String): List<MemberAccount> =
-        couponAccounts("index.php/cashier/order.HallCart/getPackCouponList", tableId, orderId, supplierId)
+    fun memberCoupons(tableId: String, orderId: String, supplierId: String, mobile: String = ""): List<MemberAccount> =
+        couponAccounts("index.php/cashier/order.HallCart/getCouponList", tableId, orderId, supplierId, mobile)
+
+    fun packCoupons(tableId: String, orderId: String, supplierId: String, mobile: String = ""): List<MemberAccount> =
+        couponAccounts("index.php/cashier/order.HallCart/getPackCouponList", tableId, orderId, supplierId, mobile)
 
     fun applyCoupons(orderId: String, settleValue: String, coupons: List<JsonObject>) {
         post(
@@ -565,26 +639,53 @@ class CashierApi(
     fun printPreview(orderId: String, payments: List<PaymentLine>) {
         post(
             "index.php/cashier/order.OrderDetail/printOrder",
-            buildJsonObject {
-                put("order_id", JsonPrimitive(orderId))
-                put(
-                    "settle",
-                    buildJsonArray {
-                        payments.forEach { line ->
-                            add(
-                                buildJsonObject {
-                                    put("settle_id", JsonPrimitive(line.settleId))
-                                    put("settle_type", JsonPrimitive(line.type))
-                                    put("settle_money", JsonPrimitive(line.money))
-                                    put("num", JsonPrimitive(line.num.ifBlank { "1" }))
-                                    put("out_trade_no", JsonPrimitive(line.outTradeNo))
-                                },
-                            )
-                        }
-                    },
-                )
-            },
+            settlementBreakdownRequest(orderId, payments),
         ).requireOk()
+    }
+
+    fun consumptionDetails(orderId: String, payments: List<PaymentLine>): List<ConsumptionGroup> {
+        val data = post(
+            "index.php/cashier/order.OrderDetail/OrderProductDetail",
+            settlementBreakdownRequest(orderId, payments),
+        ).requireOk()
+        return data.array("list").map { group ->
+            ConsumptionGroup(
+                name = group.s("name"),
+                qty = group.s("num"),
+                total = group.s("total_price"),
+                payable = group.s("total_pay_price"),
+                tip = group.s("tip"),
+                isCoupon = group.s("is_coupon") == "1",
+                products = group.array("canpin_arr").ifEmpty { group.array("canpin") }.map { product ->
+                    val refund = product.obj("refund_data")
+                    ConsumptionProduct(
+                        name = product.s("product_name"),
+                        qty = product.s("total_num"),
+                        total = product.s("total_price"),
+                        payable = product.s("total_pay_price"),
+                        isGift = product.s("is_gift") == "1",
+                        isPromotion = product.s("is_promotion") == "1",
+                        refundQty = refund.s("num"),
+                        refundMoney = refund.s("refund_money"),
+                    )
+                },
+            )
+        }
+    }
+
+    private fun settlementBreakdownRequest(orderId: String, payments: List<PaymentLine>) = buildJsonObject {
+        put("order_id", JsonPrimitive(orderId))
+        put("settle", buildJsonArray {
+            for (line in payments) {
+                add(json(
+                    "settle_id" to line.settleId,
+                    "settle_type" to line.type,
+                    "settle_money" to line.money,
+                    "num" to line.num.ifBlank { "1" },
+                    "out_trade_no" to line.outTradeNo,
+                ))
+            }
+        })
     }
 
     fun cashierVersion(): AppRelease {
@@ -608,7 +709,7 @@ class CashierApi(
         )
     }
 
-    private fun couponAccounts(path: String, tableId: String, orderId: String, supplierId: String): List<MemberAccount> {
+    private fun couponAccounts(path: String, tableId: String, orderId: String, supplierId: String, mobile: String): List<MemberAccount> {
         val data = post(
             path,
             buildJsonObject {
@@ -616,7 +717,7 @@ class CashierApi(
                 put("order_id", JsonPrimitive(orderId))
                 put("shop_supplier_id", JsonPrimitive(supplierId))
                 put("user_id", JsonPrimitive(""))
-                put("mobile", JsonPrimitive(""))
+                put("mobile", JsonPrimitive(mobile))
                 put("coupon", buildJsonArray { })
                 put("settle", buildJsonArray { })
             },
@@ -626,14 +727,9 @@ class CashierApi(
                 name = account.s("name"),
                 mobile = account.s("mobile"),
                 userId = account.s("user_id"),
-                coupons = account.array("coupon").map { coupon ->
-                    MemberCoupon(
-                        name = coupon.s("name").ifBlank { coupon.s("apply_name") },
-                        money = coupon.s("coupon_money").ifBlank { coupon.s("reduce_price") },
-                        settleType = coupon.s("settle_type"),
-                        raw = coupon,
-                    )
-                },
+                coupons = account.array("coupon").map { it.toMemberCoupon() },
+                unavailableCoupons = account.array("notUseCoupon").map { it.toMemberCoupon() },
+                equity = account.s("equity"),
             )
         }
     }
@@ -702,6 +798,7 @@ class CashierApi(
             stream.write(body.toString().toByteArray(Charsets.UTF_8))
         }
         val code = connection.responseCode
+        if (code >= 400) Log.w("CashierApi", "POST $path returned HTTP $code")
         val text = (if (code in 200..299) connection.inputStream else connection.errorStream)
             ?.bufferedReader()
             ?.use { it.readText() }
@@ -719,6 +816,7 @@ class CashierApi(
     }
 
     companion object {
+        const val COMPATIBILITY_VERSION = "1.0.5.3"
         const val BASE = "http://114.55.219.79/"
         const val APP_ID = "10001"
     }
@@ -786,6 +884,7 @@ private fun JsonObject.toSession(fallbackName: String) = CashierSession(
     userId = s("user_id").ifBlank { s("userCode").ifBlank { s("cashier_id") } },
     appId = s("app_id").ifBlank { "10001" },
     mobile = s("mobile").ifBlank { s("userPhone") },
+    userCode = s("userCode"),
 )
 
 private fun JsonObject.toArea() = TableArea(
@@ -804,6 +903,7 @@ private fun JsonObject.toTable() = DiningTable(
     mealNum = s("meal_num"),
     maxNum = s("max_num"),
     useTime = s("use_time"),
+    seating = s("queue_status") == "1",
 )
 
 private fun JsonObject.toProduct(): Product {
@@ -840,6 +940,8 @@ private fun JsonObject.toTableOrder() = TableOrder(
     productNum = s("product_num"),
     userId = s("user_id"),
     shopSupplierId = s("shop_supplier_id"),
+    hasPaymentRecord = s("has_pay_record") == "1",
+    hasSeasoningWarning = s("is_tip") == "1",
     lines = array("product").map {
         OrderLine(
             orderProductId = it.s("order_product_id"),
@@ -867,6 +969,7 @@ private fun JsonObject.toSettleOrder(): SettleOrder {
         totalPrice = s("total_price"),
         orderPrice = s("order_price"),
         payPrice = s("pay_price").ifBlank { s("should_pay_price") },
+        receivable = s("should_pay_price"),
         discount = s("discount_money"),
         giveChange = s("giveChange"),
         realMoney = s("real_money"),
@@ -911,6 +1014,7 @@ data class CashierSession(
     val userId: String,
     val appId: String,
     val mobile: String,
+    val userCode: String = "",
 )
 
 data class GraphicCode(val key: String, val code: String)
@@ -930,6 +1034,7 @@ data class DiningTable(
     val mealNum: String,
     val maxNum: String,
     val useTime: String,
+    val seating: Boolean = false,
 )
 
 data class ProductCategory(val id: String, val name: String)
@@ -987,6 +1092,8 @@ data class TableOrder(
     val userId: String,
     val shopSupplierId: String,
     val lines: List<OrderLine>,
+    val hasPaymentRecord: Boolean = false,
+    val hasSeasoningWarning: Boolean = false,
 )
 
 data class SettleOrder(
@@ -1008,6 +1115,7 @@ data class SettleOrder(
     val payments: List<PaymentLine>,
     val coupon: JsonArray,
     val settle: JsonArray,
+    val receivable: String = "",
 )
 
 data class PaymentLine(
@@ -1020,6 +1128,27 @@ data class PaymentLine(
     val outTradeNo: String = "",
     val douyin: Boolean = false,
     val meituan: Boolean = false,
+)
+
+data class ConsumptionGroup(
+    val name: String,
+    val qty: String,
+    val total: String,
+    val payable: String,
+    val tip: String,
+    val isCoupon: Boolean,
+    val products: List<ConsumptionProduct>,
+)
+
+data class ConsumptionProduct(
+    val name: String,
+    val qty: String,
+    val total: String,
+    val payable: String,
+    val isGift: Boolean,
+    val isPromotion: Boolean,
+    val refundQty: String,
+    val refundMoney: String,
 )
 
 data class MemberCoupon(
@@ -1043,6 +1172,8 @@ data class MemberAccount(
     val mobile: String,
     val userId: String,
     val coupons: List<MemberCoupon>,
+    val unavailableCoupons: List<MemberCoupon> = emptyList(),
+    val equity: String = "",
 )
 
 data class CashierPermission(val type: String, val name: String, val allowed: Boolean)
@@ -1051,9 +1182,17 @@ data class AppRelease(val version: String, val downloadUrl: String, val content:
 
 data class AboutInfo(val appName: String, val support: String, val imagePath: String)
 
-data class PayMethod(val name: String, val type: String, val settleType: String, val payMethodId: String)
+data class PayMethod(
+    val name: String,
+    val type: String,
+    val settleType: String,
+    val payMethodId: String,
+    val description: String = "",
+)
 
-data class ScanPayResult(val status: String, val outTradeNo: String, val message: String)
+data class ScanPayResult(val status: String, val outTradeNo: String, val message: String) {
+    val paid: Boolean get() = status == "1" || message == "已支付"
+}
 
 data class DeviceCode(
     val productId: String,
@@ -1135,4 +1274,5 @@ data class OrderSummary(
     val tableId: String,
     val userId: String,
     val shopSupplierId: String,
+    val orderStatus: String = "",
 )

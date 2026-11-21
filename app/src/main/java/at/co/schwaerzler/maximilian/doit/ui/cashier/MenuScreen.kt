@@ -48,7 +48,7 @@ import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MenuScreen(tableId: String, tableNo: String, onBack: () -> Unit, onOrdered: () -> Unit) {
+fun MenuScreen(tableId: String, tableNo: String, giftOrderId: String?, onBack: () -> Unit, onOrdered: () -> Unit) {
     val vm = cashierViewModel()
     val scope = rememberCoroutineScope()
     var categories by remember { mutableStateOf<List<ProductCategory>>(emptyList()) }
@@ -64,7 +64,9 @@ fun MenuScreen(tableId: String, tableNo: String, onBack: () -> Unit, onOrdered: 
     var mealNum by remember { mutableStateOf("1") }
     var remark by remember { mutableStateOf("") }
     var printKitchen by remember { mutableStateOf(true) }
-    var giftOrder by remember { mutableStateOf(false) }
+    var submitting by remember { mutableStateOf(false) }
+    val giftMode = giftOrderId != null
+    var giftOrder by remember(giftMode) { mutableStateOf(giftMode) }
 
     fun loadCart() {
         scope.launch { cart = vm.repository.cart(tableId).getOrElse { cart } }
@@ -91,7 +93,10 @@ fun MenuScreen(tableId: String, tableNo: String, onBack: () -> Unit, onOrdered: 
 
     Scaffold(
         topBar = {
-            CashierTopBar(title = "${tableNo.ifBlank { "桌台" }} · 商品", onBack = onBack) {
+            CashierTopBar(
+                title = "${tableNo.ifBlank { "桌台" }} · ${if (giftMode) "赠送商品" else "商品"}",
+                onBack = onBack,
+            ) {
                 TextButton(onClick = { loadProducts() }) { Text("搜索") }
             }
         },
@@ -176,6 +181,7 @@ fun MenuScreen(tableId: String, tableNo: String, onBack: () -> Unit, onOrdered: 
     picking?.let { product ->
         ProductSheet(
             product = product,
+            giftMode = giftMode,
             onDismiss = { picking = null },
             onAdd = { sku, attr, feed, describe, gift ->
                 scope.launch {
@@ -233,41 +239,52 @@ fun MenuScreen(tableId: String, tableNo: String, onBack: () -> Unit, onOrdered: 
                 OutlinedTextField(mealNum, { mealNum = it }, Modifier.fillMaxWidth(), label = { Text("就餐人数") }, singleLine = true)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = printKitchen, onClick = { printKitchen = !printKitchen }, label = { Text("打印厨单") })
-                    FilterChip(selected = giftOrder, onClick = { giftOrder = !giftOrder }, label = { Text("整单赠送") })
+                    if (!giftMode) {
+                        FilterChip(selected = giftOrder, onClick = { giftOrder = !giftOrder }, label = { Text("整单赠送") })
+                    }
                 }
                 Button(
                     onClick = { askSubmit = true },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = cart.lines.isNotEmpty(),
-                ) { Text("去下单  ${money(cart.totalPay)}") }
+                    enabled = cart.lines.isNotEmpty() && !submitting,
+                ) { Text(if (giftMode) "提交赠送" else "去下单  ${money(cart.totalPay)}") }
             }
         }
     }
 
     if (askSubmit) {
         AlertDialog(
-            onDismissRequest = { askSubmit = false },
-            title = { Text("下单") },
-            text = { Text("确认提交当前购物车？") },
+            onDismissRequest = { if (!submitting) askSubmit = false },
+            title = { Text(if (giftMode) "赠送" else "下单") },
+            text = { Text(if (giftMode) "确认将当前购物车的商品作为赠品提交？" else "确认提交当前购物车？") },
             confirmButton = {
-                TextButton(onClick = {
-                    askSubmit = false
-                    showCart = false
+                TextButton(enabled = !submitting, onClick = {
+                    submitting = true
                     scope.launch {
-                        val existing = vm.repository.orderOnTable(tableId).getOrNull()?.orderId.orEmpty()
-                        val done = if (existing.isNotBlank()) {
-                            vm.repository.addMeal(tableId, remark, existing, giftOrder, printKitchen)
-                        } else {
-                            vm.repository.submitOrder(tableId, remark, mealNum.ifBlank { "1" }, giftOrder, printKitchen)
-                        }
-                        done.orToast(vm.repository)?.let {
-                            vm.repository.toast(if (existing.isNotBlank()) "加菜成功" else "下单成功")
-                            onOrdered()
+                        try {
+                            val existing = vm.repository.orderOnTable(tableId).orToast(vm.repository)?.orderId ?: return@launch
+                            if (giftOrderId != null && giftOrderId != existing) {
+                                vm.repository.toast("订单已变化，请返回桌台重新确认")
+                                return@launch
+                            }
+                            val done = if (existing.isNotBlank()) {
+                                vm.repository.addMeal(tableId, remark, existing, giftOrder, printKitchen)
+                            } else {
+                                vm.repository.submitOrder(tableId, remark, mealNum.ifBlank { "1" }, giftOrder, printKitchen)
+                            }
+                            done.orToast(vm.repository)?.let {
+                                vm.repository.toast(if (giftMode) "赠送成功" else if (existing.isNotBlank()) "加菜成功" else "下单成功")
+                                askSubmit = false
+                                showCart = false
+                                onOrdered()
+                            }
+                        } finally {
+                            submitting = false
                         }
                     }
-                }) { Text("确定") }
+                }) { Text(if (submitting) "提交中" else "确定") }
             },
-            dismissButton = { TextButton(onClick = { askSubmit = false }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { askSubmit = false }, enabled = !submitting) { Text("取消") } },
         )
     }
 }
@@ -276,6 +293,7 @@ fun MenuScreen(tableId: String, tableNo: String, onBack: () -> Unit, onOrdered: 
 @Composable
 private fun ProductSheet(
     product: Product,
+    giftMode: Boolean,
     onDismiss: () -> Unit,
     onAdd: (Sku?, String, String, String, Boolean) -> Unit,
 ) {
@@ -283,7 +301,7 @@ private fun ProductSheet(
     var attr by remember { mutableStateOf("") }
     var feeds by remember { mutableStateOf(setOf<Feed>()) }
     var describe by remember { mutableStateOf("") }
-    var gift by remember { mutableStateOf(false) }
+    var gift by remember(giftMode) { mutableStateOf(giftMode) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(product.name, style = MaterialTheme.typography.titleLarge)
@@ -323,7 +341,7 @@ private fun ProductSheet(
                 }
             }
             OutlinedTextField(describe, { describe = it }, Modifier.fillMaxWidth(), label = { Text("备注") })
-            FilterChip(selected = gift, onClick = { gift = !gift }, label = { Text("赠送") })
+            if (!giftMode) FilterChip(selected = gift, onClick = { gift = !gift }, label = { Text("赠送") })
             Button(
                 onClick = {
                     if (product.stock == "0") return@Button

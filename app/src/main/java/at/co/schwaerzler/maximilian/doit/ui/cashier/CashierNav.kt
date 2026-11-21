@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -43,7 +44,7 @@ object CashierLogin
 object CashierHome
 
 @Serializable
-data class CashierMenu(val tableId: String, val tableNo: String)
+data class CashierMenu(val tableId: String, val tableNo: String, val giftOrderId: String? = null)
 
 @Serializable
 data class CashierOrder(val tableId: String, val tableNo: String)
@@ -52,10 +53,16 @@ data class CashierOrder(val tableId: String, val tableNo: String)
 data class CashierScan(val tableId: String, val tableNo: String)
 
 @Serializable
-data class CashierSettle(val orderId: String, val supplierId: String, val userId: String)
+data class CashierSettle(
+    val orderId: String,
+    val supplierId: String,
+    val userId: String,
+    val tableId: String = "",
+    val tableLabel: String = "",
+)
 
 @Serializable
-data class CashierSwitch(val orderId: String, val merge: Boolean = false)
+data class CashierSwitch(val orderId: String, val sourceTableId: String, val merge: Boolean = false)
 
 @Serializable
 data class CashierCoupon(
@@ -79,6 +86,12 @@ fun CashierApp() {
     CashierTheme {
         val navController = rememberNavController()
         val vm = cashierViewModel()
+        val openHome: () -> Unit = {
+            navController.navigate(CashierHome) {
+                popUpTo(CashierLogin) { inclusive = true }
+                launchSingleTop = true
+            }
+        }
         var notices by remember { mutableStateOf<List<CashierNotice>>(emptyList()) }
         LaunchedEffect(Unit) {
             vm.messages.collect { text ->
@@ -100,13 +113,7 @@ fun CashierApp() {
                     modifier = Modifier.padding(padding),
                 ) {
                 composable<CashierLogin> {
-                    LoginScreen(
-                        onLoggedIn = {
-                            navController.navigate(CashierHome) {
-                                popUpTo(CashierLogin) { inclusive = true }
-                            }
-                        },
-                    )
+                    LoginScreen(onLoggedIn = openHome)
                 }
                 composable<CashierHome> {
                     CashierHomeShell(navController)
@@ -116,10 +123,12 @@ fun CashierApp() {
                     MenuScreen(
                         tableId = route.tableId,
                         tableNo = route.tableNo,
+                        giftOrderId = route.giftOrderId,
                         onBack = { navController.popBackStack() },
                         onOrdered = {
                             navController.navigate(CashierOrder(route.tableId, route.tableNo)) {
                                 popUpTo<CashierMenu> { inclusive = true }
+                                launchSingleTop = true
                             }
                         },
                     )
@@ -131,11 +140,12 @@ fun CashierApp() {
                         tableNo = route.tableNo,
                         onBack = { navController.popBackStack() },
                         onMenu = { navController.navigate(CashierMenu(route.tableId, route.tableNo)) },
+                        onGift = { orderId -> navController.navigate(CashierMenu(route.tableId, route.tableNo, orderId)) },
                         onSettle = { orderId, supplierId, userId ->
-                            navController.navigate(CashierSettle(orderId, supplierId, userId))
+                            navController.navigate(CashierSettle(orderId, supplierId, userId, route.tableId, route.tableNo))
                         },
-                        onSwitch = { orderId -> navController.navigate(CashierSwitch(orderId)) },
-                        onMerge = { orderId -> navController.navigate(CashierSwitch(orderId, merge = true)) },
+                        onSwitch = { orderId -> navController.navigate(CashierSwitch(orderId, route.tableId)) },
+                        onMerge = { orderId -> navController.navigate(CashierSwitch(orderId, route.tableId, merge = true)) },
                         onCoupon = { orderId, table, supplier, user ->
                             navController.navigate(CashierCoupon(orderId, table, supplier, user))
                         },
@@ -157,7 +167,12 @@ fun CashierApp() {
                         orderId = route.orderId,
                         supplierId = route.supplierId,
                         userId = route.userId,
+                        tableId = route.tableId,
+                        tableLabel = route.tableLabel,
                         onBack = { navController.popBackStack() },
+                        onExternalCoupon = { order ->
+                            navController.navigate(CashierCoupon(order.orderId, order.tableId, order.shopSupplierId, order.userId))
+                        },
                         onDone = {
                             navController.popBackStack(CashierHome, inclusive = false)
                         },
@@ -165,7 +180,7 @@ fun CashierApp() {
                 }
                 composable<CashierSwitch> { entry ->
                     val route = entry.toRoute<CashierSwitch>()
-                    SwitchTableScreen(route.orderId, route.merge, onBack = { navController.popBackStack() })
+                    SwitchTableScreen(route.orderId, route.sourceTableId, route.merge, onBack = { navController.popBackStack() })
                 }
                 composable<CashierCoupon> { entry ->
                     val route = entry.toRoute<CashierCoupon>()
@@ -211,7 +226,7 @@ private fun CashierHomeShell(navController: NavHostController) {
     }
     Scaffold(
         bottomBar = {
-            Row(Modifier.fillMaxWidth().background(Color.White)) {
+            Row(Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding()) {
                 listOf("桌台", "订单", "我的").forEachIndexed { index, label ->
                     val selected = tab == index
                     Column(
@@ -245,7 +260,10 @@ private fun CashierHomeShell(navController: NavHostController) {
                 )
                 1 -> OrderListScreen(onOpen = { order: OrderSummary ->
                     if (order.payStatus == "10") {
-                        navController.navigate(CashierSettle(order.orderId, order.shopSupplierId, order.userId))
+                        navController.navigate(CashierSettle(
+                            order.orderId, order.shopSupplierId, order.userId, order.tableId,
+                            "${order.areaName}${order.tableNo}",
+                        ))
                     } else {
                         navController.navigate(CashierFinished(order.orderId))
                     }

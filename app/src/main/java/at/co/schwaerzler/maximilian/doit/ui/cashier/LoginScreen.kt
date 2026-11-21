@@ -9,10 +9,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import at.co.schwaerzler.maximilian.doit.R
+import at.co.schwaerzler.maximilian.doit.pos.CashierApi
 import kotlinx.coroutines.launch
 
 @Composable
@@ -67,16 +68,18 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
     }
 
     fun submit() {
-        if (busy) return
+        if (busy || !ready) return
         if (account.isBlank() || password.isBlank()) {
             vm.repository.toast("请输入账号和密码")
             return
         }
         busy = true
         scope.launch {
-            val result = vm.repository.login(account, password)
-            busy = false
-            result.orToast(vm.repository)?.let { onLoggedIn() }
+            try {
+                vm.repository.login(account, password).orToast(vm.repository)
+            } finally {
+                busy = false
+            }
         }
     }
 
@@ -90,33 +93,18 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
         Column(
             Modifier
                 .fillMaxSize()
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(88.dp))
-            Box(
-                Modifier
-                    .size(72.dp)
-                    .shadow(8.dp, CircleShape)
-                    .clip(CircleShape)
-                    .background(Color.White),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("鲜", color = CashierHeader, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-            }
             Text(
-                "鲜主收银",
+                "收银台",
                 modifier = Modifier.padding(top = 16.dp),
                 color = Color.White,
                 fontSize = 30.sp,
                 fontWeight = FontWeight.Bold,
-            )
-            Text(
-                "收银员登录",
-                modifier = Modifier.padding(top = 6.dp),
-                color = Color.White.copy(alpha = 0.85f),
-                fontSize = 15.sp,
             )
             Column(
                 Modifier
@@ -161,7 +149,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
                         .fillMaxWidth()
                         .padding(top = 6.dp)
                         .height(48.dp),
-                    enabled = !busy,
+                    enabled = ready && !busy,
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = CashierBlue),
                 ) {
@@ -174,7 +162,7 @@ fun LoginScreen(onLoggedIn: () -> Unit) {
             }
             Spacer(Modifier.height(48.dp))
             Text(
-                "版本 1.0.3.9",
+                "兼容版本 ${CashierApi.COMPATIBILITY_VERSION}",
                 color = Color.White.copy(alpha = 0.8f),
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center,
